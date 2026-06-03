@@ -1,0 +1,38 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Feedback collection: write-only, no reads, with validation
+    match /feedback/{docId} {
+      allow read: if false;
+      allow create: if
+        // Require App Check token
+        request.app != null &&
+        // Must have required fields
+        request.resource.data.keys().hasAll(['liked', 'category', 'qualityScore', 'timestamp']) &&
+        // Validate field types
+        request.resource.data.liked is bool &&
+        request.resource.data.category is string &&
+        request.resource.data.qualityScore is number &&
+        // Cap string lengths to prevent storage abuse
+        request.resource.data.category.size() <= 50 &&
+        request.resource.data.get('reason', '').size() <= 500 &&
+        request.resource.data.get('promptText', '').size() <= 200 &&
+        request.resource.data.get('aesthetic', '').size() <= 100 &&
+        // Score values must be in valid range
+        request.resource.data.qualityScore >= 0 &&
+        request.resource.data.qualityScore <= 1 &&
+        // Limit document size (no giant base64 blobs)
+        request.resource.data.get('thumbnailBase64', '').size() <= 150000 &&
+        // Timestamp must be server-set
+        request.resource.data.timestamp == request.time;
+      allow update, delete: if false;
+    }
+
+    // Deny everything else by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

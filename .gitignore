@@ -1,0 +1,24 @@
+# Xcode
+build/
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Local workspace settings
+.*/settings.local.json
+
+# CocoaPods (if used)
+Pods/
+
+# Secrets
+*.env
+credentials.json
+
+# Firebase / Google services — contains API keys
+GoogleService-Info.plist

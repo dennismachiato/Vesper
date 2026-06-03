@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d0d0d"/>
+      <stop offset="100%" stop-color="#1a1a1a"/>
+    </linearGradient>
+    <linearGradient id="vGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.5"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1024" height="1024" rx="230" fill="url(#bg2)"/>
+
+  <!-- Large V lettermark, centered -->
+  <text x="512" y="590"
+        font-family="Georgia, 'Times New Roman', serif"
+        font-size="520"
+        font-weight="400"
+        fill="url(#vGrad)"
+        text-anchor="middle">V</text>
+
+  <!-- Three small sparkles scattered around the V -->
+  <!-- Top left sparkle -->
+  <g transform="translate(272, 310)" opacity="0.7">
+    <line x1="0" y1="-14" x2="0" y2="14" stroke="white" stroke-width="1.5"/>
+    <line x1="-14" y1="0" x2="14" y2="0" stroke="white" stroke-width="1.5"/>
+    <line x1="-8" y1="-8" x2="8" y2="8" stroke="white" stroke-width="0.8" opacity="0.5"/>
+    <line x1="8" y1="-8" x2="-8" y2="8" stroke="white" stroke-width="0.8" opacity="0.5"/>
+  </g>
+
+  <!-- Top right sparkle (larger) -->
+  <g transform="translate(738, 260)" opacity="0.9">
+    <line x1="0" y1="-22" x2="0" y2="22" stroke="white" stroke-width="2"/>
+    <line x1="-22" y1="0" x2="22" y2="0" stroke="white" stroke-width="2"/>
+    <line x1="-12" y1="-12" x2="12" y2="12" stroke="white" stroke-width="1" opacity="0.5"/>
+    <line x1="12" y1="-12" x2="-12" y2="12" stroke="white" stroke-width="1" opacity="0.5"/>
+  </g>
+
+  <!-- Bottom right sparkle (small) -->
+  <g transform="translate(695, 650)" opacity="0.5">
+    <line x1="0" y1="-9" x2="0" y2="9" stroke="white" stroke-width="1.2"/>
+    <line x1="-9" y1="0" x2="9" y2="0" stroke="white" stroke-width="1.2"/>
+  </g>
+
+  <!-- Thin horizontal rule under V -->
+  <line x1="340" y1="680" x2="684" y2="680" stroke="white" stroke-width="0.8" opacity="0.25"/>
+
+  <!-- Tagline -->
+  <text x="512" y="740"
+        font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="38"
+        font-weight="300"
+        fill="white"
+        text-anchor="middle"
+        letter-spacing="10"
+        opacity="0.45">VESPER</text>
+</svg>
