@@ -139,9 +139,9 @@ class BatchProcessor {
         var wantsTallSubject: Bool = false
     }
 
-    // MARK: - Dislike reason → dimension weight boost (Feature 5)
+    // MARK: - Low-rating reason -> dimension weight boost (Feature 5)
 
-    /// Maps free-text dislike reasons to dimension names that should receive a scoring boost.
+    /// Maps free-text low-rating reasons to dimension names that should receive a scoring boost.
     /// Returns a dict of dimension → multiplier (e.g. ["qualityScore": 1.25]).
     func dimensionHintsFromReasons(_ reasons: [String]) -> [String: Float] {
         var hints: [String: Float] = [:]
@@ -204,8 +204,8 @@ class BatchProcessor {
     ///   n=30 → 86% strength  (close to the old formula's effective strength at 30 events)
     ///   n=100 → 95% strength (converging — essentially fully trusted)
     ///
-    /// The actual per-dimension delta (liked_avg − disliked_avg) is then scaled by shrinkage,
-    /// so a single "eyes closed" dislike with qualityScore 0.3 vs. baseline 0.5 → delta −0.2
+    /// The actual per-dimension delta (highRated_avg − low-rated_avg) is then scaled by shrinkage,
+    /// so a single "eyes closed" low rating with qualityScore 0.3 vs. baseline 0.5 → delta −0.2
     /// → raw multiplier 0.70 → shrunk to 0.94 at n=1. Tangible but not overwhelming.
     private func preferenceEvidenceWeight(for feedback: PhotoFeedback, now: Date = Date()) -> Float {
         let days = Float(now.timeIntervalSince(feedback.createdAt) / 86_400)
@@ -225,13 +225,13 @@ class BatchProcessor {
                 evidenceWeight: preferenceEvidenceWeight(for: feedback, now: now)
             )
         }
-        let likedWeighted = weightedFeedback
+        let highRatedWeighted = weightedFeedback
             .filter { $0.signal > 0 }
             .map { (feedback: $0.feedback, weight: $0.evidenceWeight * $0.signal) }
-        let dislikedWeighted = weightedFeedback
+        let lowRatedWeighted = weightedFeedback
             .filter { $0.signal < 0 }
             .map { (feedback: $0.feedback, weight: $0.evidenceWeight * abs($0.signal)) }
-        let rawEvidence = likedWeighted.map(\.weight).reduce(0, +) + dislikedWeighted.map(\.weight).reduce(0, +)
+        let rawEvidence = highRatedWeighted.map(\.weight).reduce(0, +) + lowRatedWeighted.map(\.weight).reduce(0, +)
         guard rawEvidence >= 0.25 else { return [:] }   // need at least one meaningful recent-ish event
 
         // Bayesian shrinkage: with few events, pull the multiplier toward 1.0 (no change).
@@ -249,46 +249,46 @@ class BatchProcessor {
             } / totalWeight
         }
 
-        let likedQuality     = avg(likedWeighted, \.photoQualityScore)
-        let dislikedQuality  = avg(dislikedWeighted, \.photoQualityScore)
-        let likedExposure    = avg(likedWeighted, \.photoExposureScore)
-        let dislikedExposure = avg(dislikedWeighted, \.photoExposureScore)
-        let likedComp        = avg(likedWeighted, \.photoCompositionScore)
-        let dislikedComp     = avg(dislikedWeighted, \.photoCompositionScore)
-        let likedSmile       = avg(likedWeighted, \.photoGenuineSmileScore)
-        let dislikedSmile    = avg(dislikedWeighted, \.photoGenuineSmileScore)
-        let likedEyes        = avg(likedWeighted, \.photoEyeOpenConfidence)
-        let dislikedEyes     = avg(dislikedWeighted, \.photoEyeOpenConfidence)
-        let likedHarmony     = avg(likedWeighted, \.photoColorHarmonyScore)
-        let dislikedHarmony  = avg(dislikedWeighted, \.photoColorHarmonyScore)
+        let highRatedQuality     = avg(highRatedWeighted, \.photoQualityScore)
+        let lowRatedQuality  = avg(lowRatedWeighted, \.photoQualityScore)
+        let highRatedExposure    = avg(highRatedWeighted, \.photoExposureScore)
+        let lowRatedExposure = avg(lowRatedWeighted, \.photoExposureScore)
+        let highRatedComp        = avg(highRatedWeighted, \.photoCompositionScore)
+        let lowRatedComp     = avg(lowRatedWeighted, \.photoCompositionScore)
+        let highRatedSmile       = avg(highRatedWeighted, \.photoGenuineSmileScore)
+        let lowRatedSmile    = avg(lowRatedWeighted, \.photoGenuineSmileScore)
+        let highRatedEyes        = avg(highRatedWeighted, \.photoEyeOpenConfidence)
+        let lowRatedEyes     = avg(lowRatedWeighted, \.photoEyeOpenConfidence)
+        let highRatedHarmony     = avg(highRatedWeighted, \.photoColorHarmonyScore)
+        let lowRatedHarmony  = avg(lowRatedWeighted, \.photoColorHarmonyScore)
 
         let dimensionDeltas = [
-            abs(likedQuality - dislikedQuality),
-            abs(likedExposure - dislikedExposure),
-            abs(likedComp - dislikedComp),
-            abs(likedSmile - dislikedSmile),
-            abs(likedEyes - dislikedEyes),
-            abs(likedHarmony - dislikedHarmony)
+            abs(highRatedQuality - lowRatedQuality),
+            abs(highRatedExposure - lowRatedExposure),
+            abs(highRatedComp - lowRatedComp),
+            abs(highRatedSmile - lowRatedSmile),
+            abs(highRatedEyes - lowRatedEyes),
+            abs(highRatedHarmony - lowRatedHarmony)
         ]
         let averageSeparation = dimensionDeltas.reduce(0, +) / Float(dimensionDeltas.count)
         let signalClarity = min(max((averageSeparation - 0.04) / 0.18, 0.65), 1.0)
 
         // Shrink delta toward 0 by data confidence and signal clarity, then scale.
         // Clamped to [0.75, 1.40] so learning never fully overrides the base formula.
-        // When likes/dislikes look very similar, clarity dampens the update instead of
+        // When likes/low ratings look very similar, clarity dampens the update instead of
         // letting contradictory feedback cloud the model.
-        func multiplier(likedAvg: Float, dislikedAvg: Float) -> Float {
-            let delta = (likedAvg - dislikedAvg) * shrinkage * signalClarity
+        func multiplier(highRatedAvg: Float, lowRatedAvg: Float) -> Float {
+            let delta = (highRatedAvg - lowRatedAvg) * shrinkage * signalClarity
             return min(max(1.0 + delta * 1.5, 0.75), 1.40)
         }
 
         var weights: [String: Float] = [:]
-        let qualMult    = multiplier(likedAvg: likedQuality,  dislikedAvg: dislikedQuality)
-        let expMult     = multiplier(likedAvg: likedExposure, dislikedAvg: dislikedExposure)
-        let compMult    = multiplier(likedAvg: likedComp,     dislikedAvg: dislikedComp)
-        let smileMult   = multiplier(likedAvg: likedSmile,    dislikedAvg: dislikedSmile)
-        let eyesMult    = multiplier(likedAvg: likedEyes,     dislikedAvg: dislikedEyes)
-        let harmonyMult = multiplier(likedAvg: likedHarmony,  dislikedAvg: dislikedHarmony)
+        let qualMult    = multiplier(highRatedAvg: highRatedQuality,  lowRatedAvg: lowRatedQuality)
+        let expMult     = multiplier(highRatedAvg: highRatedExposure, lowRatedAvg: lowRatedExposure)
+        let compMult    = multiplier(highRatedAvg: highRatedComp,     lowRatedAvg: lowRatedComp)
+        let smileMult   = multiplier(highRatedAvg: highRatedSmile,    lowRatedAvg: lowRatedSmile)
+        let eyesMult    = multiplier(highRatedAvg: highRatedEyes,     lowRatedAvg: lowRatedEyes)
+        let harmonyMult = multiplier(highRatedAvg: highRatedHarmony,  lowRatedAvg: lowRatedHarmony)
 
         // Only store if there's a real signal — avoids noise from near-identical scores
         if abs(qualMult    - 1.0) > 0.03 { weights["qualityScore"]       = qualMult    }
@@ -300,7 +300,7 @@ class BatchProcessor {
         return weights
     }
 
-    /// Learns the user's preferred head angle (yaw) from liked photos where their OWN face was
+    /// Learns the user's preferred head angle (yaw) from high-rated photos where their OWN face was
     /// identified. Returns nil until there are ≥5 such samples — angle is personal and noisy, so
     /// it needs more evidence than the dimension weights before it influences ranking. The value is
     /// the mean absolute yaw (radians) of liked, identified self-photos; weightedScore then applies
@@ -325,25 +325,25 @@ class BatchProcessor {
         let closed = closedSelf.isEmpty ? closedAll : closedSelf
         guard !closed.isEmpty else { return 0 }
 
-        let likedClosed = closed.filter { $0.preferenceSignal > 0 }
-        let dislikedClosed = closed.filter { $0.preferenceSignal < 0 }
+        let highRatedClosed = closed.filter { $0.preferenceSignal > 0 }
+        let lowRatedClosed = closed.filter { $0.preferenceSignal < 0 }
         let now = Date()
-        let likedWeight = likedClosed.map { preferenceEvidenceWeight(for: $0, now: now) * $0.preferenceSignal }.reduce(0, +)
-        let dislikedWeight = dislikedClosed.map { preferenceEvidenceWeight(for: $0, now: now) * abs($0.preferenceSignal) }.reduce(0, +)
-        let rawEvidence = likedWeight + dislikedWeight
+        let highRatedWeight = highRatedClosed.map { preferenceEvidenceWeight(for: $0, now: now) * $0.preferenceSignal }.reduce(0, +)
+        let lowRatedWeight = lowRatedClosed.map { preferenceEvidenceWeight(for: $0, now: now) * abs($0.preferenceSignal) }.reduce(0, +)
+        let rawEvidence = highRatedWeight + lowRatedWeight
         let n = effectiveEvidenceCount(rawEvidence)
         guard n > 0 else { return 0 }
 
-        let likeRatio = likedWeight / rawEvidence
+        let likeRatio = highRatedWeight / rawEvidence
         let preference = max((likeRatio - 0.5) * 2.0, 0.0)
         guard preference > 0 else { return 0 }
 
         let shrinkage = n / (n + 5.0)
         let avgContext: Float
-        if likedClosed.isEmpty || likedWeight <= 0 {
+        if highRatedClosed.isEmpty || highRatedWeight <= 0 {
             avgContext = 0.5
         } else {
-            avgContext = likedClosed.reduce(Float(0)) { partial, feedback in
+            avgContext = highRatedClosed.reduce(Float(0)) { partial, feedback in
                 let weight = preferenceEvidenceWeight(for: feedback, now: now) * feedback.preferenceSignal
                 return partial + closedEyeContextScore(
                     quality: feedback.photoQualityScore,
@@ -354,7 +354,7 @@ class BatchProcessor {
                     reference: feedback.photoReferenceScore,
                     yaw: feedback.photoFaceYaw
                 ) * weight
-            } / likedWeight
+            } / highRatedWeight
         }
         let contextConfidence = min(max((avgContext - 0.45) / 0.35, 0), 1)
 
@@ -429,11 +429,11 @@ class BatchProcessor {
         datingAudience: String = "",
         likedEmbeddings: [(embedding: [Float], date: Date)] = [],
         neutralEmbeddings: [(embedding: [Float], date: Date)] = [],
-        dislikedEmbeddings: [(embedding: [Float], date: Date)] = [],
-        dislikeReasonEmbeddings: [(embedding: [Float], date: Date)] = [],
-        contrastEmbeddings: [(embedding: [Float], date: Date)] = [],   // "runner-up" embeddings — photos seen just before a liked photo
+        lowRatedEmbeddings: [(embedding: [Float], date: Date)] = [],
+        lowRatingReasonEmbeddings: [(embedding: [Float], date: Date)] = [],
+        contrastEmbeddings: [(embedding: [Float], date: Date)] = [],   // "runner-up" embeddings — photos seen just before a high-rated photo
         feedbackHistory: [PhotoFeedback] = [],   // full history — used for weight learning
-        dislikeReasons: [String] = [],           // raw dislike reason strings — used for dimension hints
+        lowRatingReasons: [String] = [],           // raw low-rating reason strings — used for dimension hints
         userFaceEmbeddings: [[Float]] = [],      // CLIP embeddings of face crops from reference photos — used to identify the user
         requireUniquePicks: Bool = true,         // when false, skip scene-diversity dedup
         onProgress: ((Int, Int) -> Void)? = nil   // (completed, total) — called on main actor
@@ -462,10 +462,10 @@ class BatchProcessor {
         // 3. Whether reference / prompt / feedback paths are active
         let hasReference = !referenceEmbeddings.isEmpty || avgEmbedding != nil
         let needsCLIP    = promptEmbedding != nil || !likedEmbeddings.isEmpty
-                           || !dislikedEmbeddings.isEmpty || !dislikeReasonEmbeddings.isEmpty
+                           || !lowRatedEmbeddings.isEmpty || !lowRatingReasonEmbeddings.isEmpty
                            || !contrastEmbeddings.isEmpty || hasReference
         let hasFeedback  = !likedEmbeddings.isEmpty || !neutralEmbeddings.isEmpty
-                           || !dislikedEmbeddings.isEmpty || !dislikeReasonEmbeddings.isEmpty
+                           || !lowRatedEmbeddings.isEmpty || !lowRatingReasonEmbeddings.isEmpty
                            || !contrastEmbeddings.isEmpty
 
         // Recency decay constant: weight = exp(-k * days). k=0.003 → ~half weight at ~231 days.
@@ -493,8 +493,8 @@ class BatchProcessor {
             return 0.25 + ramp * (rcRefWeight - 0.25)
         }() : 0.0
 
-        // Feature 5: dimension hints from dislike reasons (e.g. "blurry" → boost qualityScore weight)
-        let dimHints = dimensionHintsFromReasons(dislikeReasons)
+        // Feature 5: dimension hints from low-rating reasons (e.g. "blurry" → boost qualityScore weight)
+        let dimHints = dimensionHintsFromReasons(lowRatingReasons)
 
         // Feature 6: per-user weight learning from historical feedback.
         // Starts from the first event, then uses shrinkage so early feedback is gentle.
@@ -635,15 +635,15 @@ class BatchProcessor {
 
                         // Positive and negative paths are now symmetric:
                         // Max positive contribution: +0.30 (liked)
-                        // Max negative contribution: -0.30 (disliked) - 0.10 (reason) - 0.08 (contrast) = -0.48
-                        // Previously negatives could reach -0.67, making a single dislike hit harder than two likes.
-                        // Reduced dislike reason and contrast weights so the total negative budget ≈ -0.48 max.
+                        // Max negative contribution: -0.30 (low-rated) - 0.10 (reason) - 0.08 (contrast) = -0.48
+                        // Previously negatives could reach -0.67, making a single low rating hit harder than two likes.
+                        // Reduced low-rating reason and contrast weights so the total negative budget ≈ -0.48 max.
                         if !likedEmbeddings.isEmpty  { feedbackScore += weightedSim(likedEmbeddings)  * 0.30 }
                         if !neutralEmbeddings.isEmpty {
                             feedbackScore += (0.5 - feedbackScore) * weightedSim(neutralEmbeddings) * 0.15
                         }
-                        if !dislikedEmbeddings.isEmpty      { feedbackScore -= weightedSim(dislikedEmbeddings)      * 0.30 }
-                        if !dislikeReasonEmbeddings.isEmpty { feedbackScore -= weightedSim(dislikeReasonEmbeddings) * 0.10 }
+                        if !lowRatedEmbeddings.isEmpty      { feedbackScore -= weightedSim(lowRatedEmbeddings)      * 0.30 }
+                        if !lowRatingReasonEmbeddings.isEmpty { feedbackScore -= weightedSim(lowRatingReasonEmbeddings) * 0.10 }
                         if !contrastEmbeddings.isEmpty      { feedbackScore -= weightedSim(contrastEmbeddings)      * 0.08 }
                         s.feedbackScore = max(0, min(1, feedbackScore))
                     }
@@ -1371,7 +1371,7 @@ class BatchProcessor {
         intent: PromptIntent? = nil,
         isDatingMode: Bool = false,
         datingAudience: String = "",           // "women", "men", or "everyone" — shifts dating formula weights
-        dimHints: [String: Float] = [:],       // F5: dislike reason → dimension boost
+        dimHints: [String: Float] = [:],       // F5: low-rating reason -> dimension boost
         learnedWeights: [String: Float] = [:], // F6: per-user learned weight multipliers
         learnedPreferredYaw: Float? = nil,     // learned preferred head angle (radians), nil = unknown
         closedEyeTolerance: Float = 0          // learned user tolerance for intentional closed-eye shots
@@ -1379,9 +1379,9 @@ class BatchProcessor {
         let ref = score.referenceScore ?? 0
 
         // Combine dimHints and learnedWeights multiplicatively so that:
-        //   - Dislike-reason hints (always >= 1.0) boost the dimension weight
+        //   - Low-rating reason hints (always >= 1.0) boost the dimension weight
         //   - Learned weights (can be < 1.0) can also DECREASE it when the user's
-        //     liked photos consistently score low on that dimension
+        //     high-rated photos consistently score low on that dimension
         // Previously used max(), which silenced learned decreases.
         func dimMult(_ key: String) -> Float {
             // Cap each factor before multiplying so neither alone can saturate the product cap.
@@ -1467,7 +1467,7 @@ class BatchProcessor {
         // used to get under the old eyeOpenConfidence-only formula. This stops sunglasses
         // photos from being falsely promoted or falsely punished.
         //
-        // eyeHintMult: if the user's dislike reason mentioned closed/tired eyes, the penalty
+        // eyeHintMult: if the user's low-rating reason mentioned closed/tired eyes, the penalty
         // for low eye-open confidence is tightened. Open eyes (confidence ≥ 0.85) are
         // unaffected — we don't want to double-reward good eyes, just make bad eyes hurt more.
         let eyeHintMult = dimMult("eyeOpenConfidence")
@@ -1488,7 +1488,7 @@ class BatchProcessor {
                     ? closedEyePenaltyRelief(for: score, tolerance: closedEyeTolerance)
                     : 0
                 let contextualBase = base + (0.92 - base) * relief
-                // Always respect explicit closed-eye dislike hints on closed-eye photos.
+                // Always respect explicit closed-eye low rating hints on closed-eye photos.
                 if score.eyeState == .closed, eyeHintMult > 1.0 {
                     eyePenalty = max(contextualBase / eyeHintMult, 0.35)
                 } else {

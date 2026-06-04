@@ -55,11 +55,11 @@ struct ProcessingView: View {
     let datingAudience: String
     let likedEmbeddings: [(embedding: [Float], date: Date)]
     let neutralEmbeddings: [(embedding: [Float], date: Date)]
-    let dislikedEmbeddings: [(embedding: [Float], date: Date)]
-    let dislikeReasonEmbeddings: [(embedding: [Float], date: Date)]
+    let lowRatedEmbeddings: [(embedding: [Float], date: Date)]
+    let lowRatingReasonEmbeddings: [(embedding: [Float], date: Date)]
     let contrastEmbeddings: [(embedding: [Float], date: Date)]
     let feedbackHistory: [PhotoFeedback]
-    let dislikeReasons: [String]
+    let lowRatingReasons: [String]
     let purposeTag: String
     /// CLIP embeddings of face crops from reference photos — passed to BatchProcessor so it can
     /// identify which face in each photo belongs to the user.
@@ -432,11 +432,11 @@ struct ProcessingView: View {
                 datingAudience: datingAudience,
                 likedEmbeddings: likedEmbeddings,
                 neutralEmbeddings: neutralEmbeddings,
-                dislikedEmbeddings: dislikedEmbeddings,
-                dislikeReasonEmbeddings: dislikeReasonEmbeddings,
+                lowRatedEmbeddings: lowRatedEmbeddings,
+                lowRatingReasonEmbeddings: lowRatingReasonEmbeddings,
                 contrastEmbeddings: contrastEmbeddings,
                 feedbackHistory: feedbackHistory,
-                dislikeReasons: dislikeReasons,
+                lowRatingReasons: lowRatingReasons,
                 userFaceEmbeddings: userFaceEmbeddings,
                 requireUniquePicks: requireUniquePicks,
                 onProgress: { completed, total in
@@ -480,11 +480,11 @@ struct ProcessingView: View {
         datingAudience: "",
         likedEmbeddings: [(embedding: [Float], date: Date)](),
         neutralEmbeddings: [(embedding: [Float], date: Date)](),
-        dislikedEmbeddings: [(embedding: [Float], date: Date)](),
-        dislikeReasonEmbeddings: [(embedding: [Float], date: Date)](),
+        lowRatedEmbeddings: [(embedding: [Float], date: Date)](),
+        lowRatingReasonEmbeddings: [(embedding: [Float], date: Date)](),
         contrastEmbeddings: [(embedding: [Float], date: Date)](),
         feedbackHistory: [],
-        dislikeReasons: [],
+        lowRatingReasons: [],
         purposeTag: "",
         requireUniquePicks: true
     ) { _, _, _, _ in }

@@ -147,7 +147,7 @@ struct HomeView: View {
                                 ForEach([
                                     ("1", "photo.stack", "Pick 10–50 similar photos", "Burst shots, event photos, anything you want to sort through"),
                                     ("2", "sparkles", "AI ranks them instantly", "Scored by sharpness, faces, expression & your style — all on-device"),
-                                    ("3", "checkmark.circle", "Keep the best, review the rest", "Rate photos with Like, Meh, or Dislike to help Vesper learn your taste")
+                                    ("3", "checkmark.circle", "Keep the best, review the rest", "Rate photos from 1 to 5 stars to help Vesper learn your taste")
                                 ], id: \.0) { _, icon, title, subtitle in
                                     HStack(alignment: .top, spacing: 12) {
                                         Image(systemName: icon)

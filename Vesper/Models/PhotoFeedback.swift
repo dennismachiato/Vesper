@@ -9,8 +9,8 @@ import UIKit
 @Model
 class PhotoFeedback {
     var liked: Bool
-    var isNeutral: Bool = false  // true when user tapped "Meh" — neither liked nor disliked
-    var reason: String          // filled when disliked; empty when liked/neutral
+    var isNeutral: Bool = false
+    var reason: String
     var embeddingData: Data     // CLIP image embedding of the photo
     var reasonEmbeddingData: Data  // CLIP text embedding of the reason (empty if no reason)
     var createdAt: Date
@@ -38,7 +38,7 @@ class PhotoFeedback {
     /// Whether the user's own face was identified in this photo — gates angle/expression learning.
     var userFaceIdentified: Bool = false
 
-    // V10 additions: 1...5 curation rating. 0 means older like/meh/dislike feedback.
+    // V10 additions: 1...5 curation rating. 0 means pre-rating feedback.
     var starRating: Int = 0
 
     init(liked: Bool, isNeutral: Bool = false, reason: String = "",

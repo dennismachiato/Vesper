@@ -4,8 +4,8 @@
 //
 //  Cold-start style quiz: shown once after onboarding when the user has zero feedback.
 //  Presents 4 pairwise style preference questions to bootstrap the taste profile.
-//  Each answer inserts two synthetic PhotoFeedback entries — a "like" for the preferred
-//  style and a "dislike" for the rejected one — using CLIP text embeddings as proxies.
+//  Each answer inserts two synthetic PhotoFeedback entries: a 5-star signal for the preferred
+//  style and a 1-star signal for the rejected one, using CLIP text embeddings as proxies.
 //
 
 import SwiftUI
@@ -196,12 +196,12 @@ struct StyleQuizView: View {
         let rejectedEmb  = CLIPTextEmbedder.shared?.embed(prompt: rejected.clipPrompt)  ?? []
 
         if !preferredEmb.isEmpty {
-            let like = PhotoFeedback(liked: true, imageEmbedding: preferredEmb, purposeTag: "quiz", starRating: 5)
-            modelContext.insert(like)
+            let highRating = PhotoFeedback(liked: true, imageEmbedding: preferredEmb, purposeTag: "quiz", starRating: 5)
+            modelContext.insert(highRating)
         }
         if !rejectedEmb.isEmpty {
-            let dislike = PhotoFeedback(liked: false, imageEmbedding: rejectedEmb, purposeTag: "quiz", starRating: 1)
-            modelContext.insert(dislike)
+            let lowRating = PhotoFeedback(liked: false, imageEmbedding: rejectedEmb, purposeTag: "quiz", starRating: 1)
+            modelContext.insert(lowRating)
         }
         do {
             try modelContext.save()

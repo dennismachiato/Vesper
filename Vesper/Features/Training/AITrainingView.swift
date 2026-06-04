@@ -281,7 +281,7 @@ struct AITrainingView: View {
                         }
                     }
 
-                    comparisonButton(title: "Both OK", icon: "hand.raised.fill", tint: .orange) {
+                    comparisonButton(title: "Both Average", icon: "hand.raised.fill", tint: .orange) {
                         savePairwiseNeutral(leftIndex: pair.left, rightIndex: pair.right)
                     }
 
@@ -425,7 +425,7 @@ struct AITrainingView: View {
         switch rating {
         case 5: return "Highly preferred"
         case 4: return "Decent pick"
-        case 3: return "OK"
+        case 3: return "Average"
         case 2: return "Weak photo"
         default: return "Not ideal"
         }

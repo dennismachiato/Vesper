@@ -24,7 +24,7 @@ The app is built around a simple product idea: photo selection is personal. A te
 - Native SwiftUI app with SwiftData persistence
 - On-device photo analysis with Apple Vision and Core ML
 - CLIP-based image and text embeddings for prompt matching, aesthetic scoring, and reference-photo similarity
-- User preference learning from Like, OK, and Dislike feedback
+- User preference learning from 1-5 star photo ratings
 - Reference-photo profile that can learn a user's visual taste and help identify the recurring user face in future batches
 - Batch ranking for dating photos, social posts, professional shots, outfit checks, and camera roll cleanup
 - Full library cleanup flow with review-first delete suggestions
@@ -36,7 +36,7 @@ The app is built around a simple product idea: photo selection is personal. A te
 2. Import a batch of similar photos.
 3. Vesper scores each image using visual quality, faces, eye state, expression, pose, composition, color, reference similarity, and prompt intent.
 4. Results are ranked with readable explanations.
-5. The user rates photos as Like, OK, or Dislike. Those signals update the local preference profile for future batches.
+5. The user rates photos from 1 to 5 stars. Those signals update the local preference profile for future batches and organize rated assets into star-based Photos albums.
 
 ## AI and Scoring
 
@@ -46,12 +46,12 @@ Vesper does not upload photos to a hosted AI API for ranking. The core scoring p
 | --- | --- |
 | Vision analysis | Face detection, eye state, gaze, pose, composition, and basic quality signals |
 | CLIP image embeddings | Similarity between photos, reference style matching, and semantic scoring |
-| CLIP text embeddings | Prompt-mode matching and dislike-reason interpretation |
+| CLIP text embeddings | Prompt-mode matching and low-rating reason interpretation |
 | Reference photos | Personal style profile and recurring-face identity anchors |
-| Feedback history | Local preference adaptation based on what the user likes, dislikes, or marks OK |
+| Rating history | Local preference adaptation based on 1-5 star ratings |
 | Cleanup heuristics | Conservative delete candidates for blurry, duplicate, or weak photos |
 
-The preference system uses Bayesian shrinkage so early feedback matters without overfitting. A single dislike can nudge a dimension, but repeated feedback is required before Vesper becomes confident. This is especially important for subjective cases like closed eyes: Vesper can learn that a user likes intentional closed-eye photos when expression, angle, and framing are strong, while still treating disliked closed-eye photos as a negative signal.
+The preference system uses Bayesian shrinkage so early feedback matters without overfitting. A single low rating can nudge a dimension, but repeated ratings are required before Vesper becomes confident. This is especially important for subjective cases like closed eyes: Vesper can learn that a user prefers intentional closed-eye photos when expression, angle, and framing are strong, while still treating low-rated closed-eye photos as a negative signal.
 
 ## Privacy Model
 

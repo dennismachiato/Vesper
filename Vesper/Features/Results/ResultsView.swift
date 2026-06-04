@@ -45,6 +45,7 @@ struct ResultsView: View {
     @State private var showAlbumSavedToast = false
     @State private var showPromotedToast = false
     @State private var showRerankedToast = false
+    @State private var hasDeferredRerank = false
     @State private var sessionFeedback: [UUID: GalleryView.FeedbackState] = [:]
     @Environment(\.modelContext) private var modelContext
     @State private var showDeleteAllConfirm = false
@@ -121,7 +122,7 @@ struct ResultsView: View {
                             Text(isDatingMode ? "Best Dating Photos" : "Top Picks")
                                 .font(.title2.bold())
                                 .foregroundStyle(.white)
-                            Text("Tap a photo to view · Use Like, Meh, or Dislike to train the AI")
+                            Text("Tap a photo to view · Rate with 1-5 stars to train Vesper")
                                 .font(.caption)
                                 .foregroundStyle(.white.opacity(0.4))
                         }
@@ -689,7 +690,7 @@ struct ResultsView: View {
         }
         .fullScreenCover(isPresented: Binding(
             get: { galleryStartIndex != nil },
-            set: { if !$0 { galleryStartIndex = nil } }
+            set: { if !$0 { dismissGallery() } }
         )) {
             let photos: [PhotoResult] = {
                 switch galleryPool {
@@ -717,8 +718,19 @@ struct ResultsView: View {
                     applyLiveFeedback(photoID: photoID, state: state)
                 }
             ) {
-                galleryStartIndex = nil
+                dismissGallery()
             }
+        }
+    }
+
+    private func dismissGallery() {
+        galleryStartIndex = nil
+        guard hasDeferredRerank else { return }
+        hasDeferredRerank = false
+        rerankTopAndReviewPools()
+        withAnimation(.spring(response: 0.35)) { showRerankedToast = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+            withAnimation(.easeOut(duration: 0.35)) { showRerankedToast = false }
         }
     }
 
@@ -736,6 +748,11 @@ struct ResultsView: View {
 
         guard topPicks.contains(where: { $0.id == photoID }) ||
               runnerUps.contains(where: { $0.id == photoID }) else { return }
+
+        if galleryStartIndex != nil {
+            hasDeferredRerank = true
+            return
+        }
 
         rerankTopAndReviewPools()
         withAnimation(.spring(response: 0.35)) { showRerankedToast = true }
@@ -997,19 +1014,19 @@ struct GalleryView: View {
     let onDismiss: () -> Void
 
     @State private var currentIndex: Int
-    @State private var feedbackSaved: [Int: FeedbackState] = [:]
-    @State private var feedbackRecords: [Int: PhotoFeedback] = [:]
-    @State private var savingFeedbackIndices: Set<Int> = []
+    @State private var feedbackSaved: [UUID: FeedbackState] = [:]
+    @State private var feedbackRecords: [UUID: PhotoFeedback] = [:]
+    @State private var savingFeedbackIDs: Set<UUID> = []
     @State private var showDeleteConfirm = false
     @State private var showDeleteFromLibraryConfirm = false
     @State private var showPhotoSharePrompt = false
     @State private var showShareSheet = false
-    @State private var favoritedIndices: Set<Int> = []
+    @State private var favoritedAssetIds: Set<String> = []
     @State private var showPhotoAccessAlert = false
     @State private var showLearningToast = false
     @State private var learningToastText = "Vesper is learning your taste"
     @State private var showFavoritedToast = false
-    @State private var pendingFeedbackUploadTasks: [Int: Task<Void, Never>] = [:]
+    @State private var pendingFeedbackUploadTasks: [UUID: Task<Void, Never>] = [:]
     /// How long in-screen toasts stay visible before auto-dismissing.
     /// Tuned to ~read-one-line-of-text; matches the spring/ease timings below.
     private static let toastVisibleSeconds: Double = 2.2
@@ -1018,22 +1035,16 @@ struct GalleryView: View {
     @State private var photoLastScale: CGFloat = 1.0
     @State private var pendingFeedbackRating = 5
     @State private var pendingFeedbackReason = ""
-    @State private var pendingFeedbackIndex = 0
+    @State private var pendingFeedbackPhotoID: UUID?
     @AppStorage("hasAnsweredPhotoShare") private var hasAnsweredPhotoShare = false
     @AppStorage("photoShareOptIn") private var photoShareOptIn = false
     @Environment(\.modelContext) private var modelContext
 
     enum FeedbackState: Equatable {
-        case liked
-        case neutral
-        case disliked
         case rated(Int)
 
         var starRating: Int {
             switch self {
-            case .liked: return 5
-            case .neutral: return 3
-            case .disliked: return 1
             case .rated(let rating): return min(max(rating, 1), 5)
             }
         }
@@ -1059,7 +1070,7 @@ struct GalleryView: View {
     }
 
     var current: PhotoResult? {
-        guard !photos.isEmpty, currentIndex < photos.count else { return nil }
+        guard photos.indices.contains(currentIndex) else { return nil }
         return photos[currentIndex]
     }
 
@@ -1075,7 +1086,7 @@ struct GalleryView: View {
                 VStack(spacing: 0) {
                     // Photo pages
                     TabView(selection: $currentIndex) {
-                        ForEach(Array(photos.enumerated()), id: \.offset) { index, result in
+                        ForEach(Array(photos.enumerated()), id: \.element.id) { index, result in
                             Image(uiImage: result.image)
                                 .resizable()
                                 .scaledToFit()
@@ -1152,13 +1163,15 @@ struct GalleryView: View {
                         .id("\(currentIndex)-reasoning")  // forces full re-render on photo change
                     }
 
-                    starRatingControl(index: currentIndex)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 12)
+                    if let result = current {
+                        starRatingControl(result: result)
+                            .padding(.horizontal, 20)
+                            .padding(.top, 12)
+                    }
 
-                    if feedbackSaved[currentIndex] != nil {
+                    if let result = current, feedbackSaved[result.id] != nil {
                         Button {
-                            undoFeedback(index: currentIndex)
+                            undoFeedback(result: result)
                         } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: "arrow.uturn.backward")
@@ -1172,31 +1185,33 @@ struct GalleryView: View {
                             .clipShape(Capsule())
                             .overlay(Capsule().stroke(Color.white.opacity(0.10), lineWidth: 1))
                         }
-                        .disabled(savingFeedbackIndices.contains(currentIndex))
+                        .disabled(savingFeedbackIDs.contains(result.id))
                         .padding(.top, 8)
                         .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     }
 
                     // Favorite in Photos app
-                    let isFav = favoritedIndices.contains(currentIndex)
-                    Button {
-                        toggleFavorite(at: currentIndex)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: isFav ? "heart.fill" : "heart")
-                            Text(isFav ? "Favorited in Photos" : "Add to Favorites")
+                    if let result = current {
+                        let isFav = favoritedAssetIds.contains(result.assetIdentifier)
+                        Button {
+                            toggleFavorite(result: result)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: isFav ? "heart.fill" : "heart")
+                                Text(isFav ? "Favorited in Photos" : "Add to Favorites")
+                            }
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(isFav ? Color.vesperAccent : .white.opacity(0.7))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(isFav ? Color.vesperAccent.opacity(0.15) : Color.vesperCard)
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .overlay(RoundedRectangle(cornerRadius: 14)
+                                .stroke(isFav ? Color.vesperAccent.opacity(0.35) : Color.vesperBorder, lineWidth: 1))
                         }
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(isFav ? Color.vesperAccent : .white.opacity(0.7))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(isFav ? Color.vesperAccent.opacity(0.15) : Color.vesperCard)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .overlay(RoundedRectangle(cornerRadius: 14)
-                            .stroke(isFav ? Color.vesperAccent.opacity(0.35) : Color.vesperBorder, lineWidth: 1))
+                        .padding(.horizontal, 20)
+                        .padding(.top, 4)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 4)
 
                     // Close / Delete row
                     HStack(spacing: 10) {
@@ -1346,9 +1361,7 @@ struct GalleryView: View {
             assets.enumerateObjects { asset, _, _ in
                 if asset.isFavorite { favIds.insert(asset.localIdentifier) }
             }
-            favoritedIndices = Set(photos.indices.filter { i in
-                favIds.contains(photos[i].assetIdentifier)
-            })
+            favoritedAssetIds = favIds
         }
         .alert("Photos Access Required", isPresented: $showPhotoAccessAlert) {
             Button("Open Settings") {
@@ -1358,16 +1371,18 @@ struct GalleryView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("To favorite or delete photos, allow Vesper access to the selected photos or full access in Settings.")
+            Text("To organize, favorite, or delete photos, allow Vesper access to the selected photos or full access in Settings.")
         }
         .sheet(isPresented: $showPhotoSharePrompt) {
             PhotoShareConsentSheet { optIn in
                 hasAnsweredPhotoShare = true
                 photoShareOptIn = optIn
-                let result = pendingFeedbackIndex < photos.count ? photos[pendingFeedbackIndex] : nil
+                let result = pendingFeedbackPhotoID.flatMap { photoID in
+                    photos.first { $0.id == photoID }
+                }
                 if optIn, let result {
                     queueFeedbackUpload(
-                        index: pendingFeedbackIndex,
+                        photoID: result.id,
                         starRating: pendingFeedbackRating,
                         reason: pendingFeedbackReason,
                         result: result,
@@ -1379,15 +1394,15 @@ struct GalleryView: View {
         }
     }
 
-    private func starRatingControl(index: Int) -> some View {
-        let rating = feedbackSaved[index]?.starRating ?? 0
-        let isSaving = savingFeedbackIndices.contains(index)
+    private func starRatingControl(result: PhotoResult) -> some View {
+        let rating = feedbackSaved[result.id]?.starRating ?? 0
+        let isSaving = savingFeedbackIDs.contains(result.id)
 
         return VStack(spacing: 8) {
             HStack(spacing: 10) {
                 ForEach(1...5, id: \.self) { star in
                     Button {
-                        saveStarRating(star, index: index)
+                        saveStarRating(star, result: result)
                     } label: {
                         Image(systemName: star <= rating ? "star.fill" : "star")
                             .font(.system(size: 25, weight: .semibold))
@@ -1433,7 +1448,7 @@ struct GalleryView: View {
         switch rating {
         case 5: return "Highly preferred"
         case 4: return "Decent pick"
-        case 3: return "OK"
+        case 3: return "Average"
         case 2: return "Weak photo"
         default: return "Not ideal"
         }
@@ -1447,11 +1462,11 @@ struct GalleryView: View {
         }
     }
 
-    private func saveStarRating(_ starRating: Int, reason: String = "", index: Int, showToast: Bool = true, allowUploadPrompt: Bool = true) {
-        guard index < photos.count, !savingFeedbackIndices.contains(index) else { return }
+    private func saveStarRating(_ starRating: Int, reason: String = "", result: PhotoResult, showToast: Bool = true, allowUploadPrompt: Bool = true) {
+        guard !savingFeedbackIDs.contains(result.id) else { return }
 
-        pendingFeedbackUploadTasks[index]?.cancel()
-        pendingFeedbackUploadTasks[index] = nil
+        pendingFeedbackUploadTasks[result.id]?.cancel()
+        pendingFeedbackUploadTasks[result.id] = nil
         let rating = min(max(starRating, 1), 5)
         let liked = rating >= 4
         let isNeutral = rating == 3
@@ -1462,13 +1477,13 @@ struct GalleryView: View {
             showLearningMessage("Vesper is learning your taste")
         }
 
-        let result = photos[index]
+        let index = photos.firstIndex { $0.id == result.id } ?? currentIndex
         let previousImage = index > 0 ? photos[index - 1].image : nil
-        let previousState = feedbackSaved[index]
-        let previousRecord = feedbackRecords[index]
+        let previousState = feedbackSaved[result.id]
+        let previousRecord = feedbackRecords[result.id]
         let isCorrection = previousState != nil
-        feedbackSaved[index] = .rated(rating)
-        savingFeedbackIndices.insert(index)
+        feedbackSaved[result.id] = .rated(rating)
+        savingFeedbackIDs.insert(result.id)
 
         Task {
             let imageEmb: [Float]
@@ -1521,50 +1536,52 @@ struct GalleryView: View {
             var didSave = false
             do {
                 try modelContext.save()
-                feedbackRecords[index] = feedback
+                feedbackRecords[result.id] = feedback
                 didSave = true
                 onFeedbackChange(result.id, .rated(rating))
             } catch {
                 modelContext.rollback()
-                feedbackSaved[index] = previousState
-                feedbackRecords[index] = previousRecord
+                feedbackSaved[result.id] = previousState
+                feedbackRecords[result.id] = previousRecord
                 resultsLogger.error("Save photo feedback failed: \(error.localizedDescription, privacy: .private)")
             }
-            savingFeedbackIndices.remove(index)
+            savingFeedbackIDs.remove(result.id)
 
             guard didSave else { return }
+            addToRatingAlbumIfPossible(result: result, rating: rating)
 
             if allowUploadPrompt {
                 if hasAnsweredPhotoShare, photoShareOptIn {
-                    queueFeedbackUpload(index: index, starRating: rating, reason: reason, result: result,
+                    queueFeedbackUpload(photoID: result.id, starRating: rating, reason: reason, result: result,
                                         thumbnail: result.image)
                 } else if !isCorrection {
                     pendingFeedbackRating = rating
                     pendingFeedbackReason = reason
-                    pendingFeedbackIndex = index
+                    pendingFeedbackPhotoID = result.id
                     showPhotoSharePrompt = !hasAnsweredPhotoShare
                 }
             }
         }
     }
 
-    private func undoFeedback(index: Int) {
-        guard index < photos.count, !savingFeedbackIndices.contains(index),
-              feedbackSaved[index] != nil else { return }
+    private func undoFeedback(result: PhotoResult) {
+        guard !savingFeedbackIDs.contains(result.id),
+              feedbackSaved[result.id] != nil else { return }
 
-        pendingFeedbackUploadTasks[index]?.cancel()
-        pendingFeedbackUploadTasks[index] = nil
-        if pendingFeedbackIndex == index {
+        pendingFeedbackUploadTasks[result.id]?.cancel()
+        pendingFeedbackUploadTasks[result.id] = nil
+        if pendingFeedbackPhotoID == result.id {
             showPhotoSharePrompt = false
             pendingFeedbackReason = ""
+            pendingFeedbackPhotoID = nil
         }
 
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        let previousState = feedbackSaved[index]
-        let previousRecord = feedbackRecords[index]
-        feedbackSaved[index] = nil
-        feedbackRecords[index] = nil
-        savingFeedbackIndices.insert(index)
+        let previousState = feedbackSaved[result.id]
+        let previousRecord = feedbackRecords[result.id]
+        feedbackSaved[result.id] = nil
+        feedbackRecords[result.id] = nil
+        savingFeedbackIDs.insert(result.id)
 
         Task {
             if let previousRecord {
@@ -1572,27 +1589,27 @@ struct GalleryView: View {
             }
             do {
                 try modelContext.save()
-                onFeedbackChange(photos[index].id, nil)
+                onFeedbackChange(result.id, nil)
                 showLearningMessage("Feedback undone")
             } catch {
                 modelContext.rollback()
-                feedbackSaved[index] = previousState
-                feedbackRecords[index] = previousRecord
+                feedbackSaved[result.id] = previousState
+                feedbackRecords[result.id] = previousRecord
                 resultsLogger.error("Undo photo feedback failed: \(error.localizedDescription, privacy: .private)")
             }
-            savingFeedbackIndices.remove(index)
+            savingFeedbackIDs.remove(result.id)
         }
     }
 
-    private func queueFeedbackUpload(index: Int, starRating: Int, reason: String, result: PhotoResult, thumbnail: UIImage?) {
-        pendingFeedbackUploadTasks[index]?.cancel()
-        pendingFeedbackUploadTasks[index] = Task {
+    private func queueFeedbackUpload(photoID: UUID, starRating: Int, reason: String, result: PhotoResult, thumbnail: UIImage?) {
+        pendingFeedbackUploadTasks[photoID]?.cancel()
+        pendingFeedbackUploadTasks[photoID] = Task {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                guard feedbackSaved[index] != nil else { return }
+                guard feedbackSaved[photoID] != nil else { return }
                 uploadFeedback(starRating: starRating, reason: reason, result: result, thumbnail: thumbnail)
-                pendingFeedbackUploadTasks[index] = nil
+                pendingFeedbackUploadTasks[photoID] = nil
             }
         }
     }
@@ -1625,20 +1642,19 @@ struct GalleryView: View {
         return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
     }
 
-    private func toggleFavorite(at index: Int) {
-        guard index < photos.count else { return }
-        let assetId = photos[index].assetIdentifier
+    private func toggleFavorite(result: PhotoResult) {
+        let assetId = result.assetIdentifier
         guard !assetId.isEmpty else { return }
 
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         switch status {
         case .authorized, .limited:
-            performFavoriteToggle(assetId: assetId, index: index)
+            performFavoriteToggle(assetId: assetId)
         case .notDetermined:
             PHPhotoLibrary.requestAuthorization(for: .readWrite) { newStatus in
                 DispatchQueue.main.async {
                     if newStatus == .authorized || newStatus == .limited {
-                        self.performFavoriteToggle(assetId: assetId, index: index)
+                        self.performFavoriteToggle(assetId: assetId)
                     } else {
                         self.showPhotoAccessAlert = true
                     }
@@ -1649,14 +1665,14 @@ struct GalleryView: View {
         }
     }
 
-    private func performFavoriteToggle(assetId: String, index: Int) {
+    private func performFavoriteToggle(assetId: String) {
         let assets = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil)
         guard let asset = assets.firstObject else { return }
 
         let alreadyFav = asset.isFavorite
         // Optimistic UI update — flip immediately, revert if Photos rejects
         DispatchQueue.main.async {
-            if alreadyFav { favoritedIndices.remove(index) } else { favoritedIndices.insert(index) }
+            if alreadyFav { favoritedAssetIds.remove(assetId) } else { favoritedAssetIds.insert(assetId) }
         }
 
         PHPhotoLibrary.shared().performChanges {
@@ -1673,7 +1689,7 @@ struct GalleryView: View {
                     }
                 } else {
                     // Revert optimistic update on failure
-                    if alreadyFav { favoritedIndices.insert(index) } else { favoritedIndices.remove(index) }
+                    if alreadyFav { favoritedAssetIds.insert(assetId) } else { favoritedAssetIds.remove(assetId) }
                 }
             }
         }
@@ -1687,8 +1703,9 @@ struct GalleryView: View {
 
     private func deleteFromLibrary(at index: Int) {
         guard index < photos.count else { return }
-        let assetId = photos[index].assetIdentifier
-        saveStarRating(1, reason: "Deleted from library", index: index, showToast: false, allowUploadPrompt: false)
+        let result = photos[index]
+        let assetId = result.assetIdentifier
+        saveStarRating(1, reason: "Deleted from library", result: result, showToast: false, allowUploadPrompt: false)
         guard !assetId.isEmpty else {
             // No identifier available — fall back to remove from results only
             removeFromResults(at: index)
@@ -1724,9 +1741,91 @@ struct GalleryView: View {
             }
         }
     }
+
+    private func addToRatingAlbumIfPossible(result: PhotoResult, rating: Int) {
+        let assetId = result.assetIdentifier
+        guard !assetId.isEmpty else { return }
+
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        switch status {
+        case .authorized, .limited:
+            performRatingAlbumUpdate(assetId: assetId, rating: rating)
+        case .notDetermined:
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { newStatus in
+                DispatchQueue.main.async {
+                    if newStatus.vesperCanMutateSelectedAssets {
+                        self.performRatingAlbumUpdate(assetId: assetId, rating: rating)
+                    } else {
+                        self.showPhotoAccessAlert = true
+                    }
+                }
+            }
+        default:
+            showPhotoAccessAlert = true
+        }
+    }
+
+    private func performRatingAlbumUpdate(assetId: String, rating: Int) {
+        let normalizedRating = min(max(rating, 1), 5)
+        let targetTitle = ratingAlbumTitle(normalizedRating)
+        let albums = existingRatingAlbums()
+        let targetAlbum = albums[normalizedRating]
+        let targetAlreadyContainsAsset = targetAlbum.map { ratingAlbum($0, containsAssetID: assetId) } ?? false
+
+        PHPhotoLibrary.shared().performChanges {
+            let assets = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil)
+            guard let asset = assets.firstObject else { return }
+            let assetArray = [asset] as NSArray
+
+            for (albumRating, album) in albums where albumRating != normalizedRating {
+                PHAssetCollectionChangeRequest(for: album)?.removeAssets(assetArray)
+            }
+
+            if let targetAlbum {
+                if !targetAlreadyContainsAsset {
+                    PHAssetCollectionChangeRequest(for: targetAlbum)?.addAssets(assetArray)
+                }
+            } else {
+                let request = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: targetTitle)
+                request.addAssets(assetArray)
+            }
+        } completionHandler: { success, error in
+            if !success, let error {
+                resultsLogger.error("Rating album update failed: \(error.localizedDescription, privacy: .private)")
+            }
+        }
+    }
+
+    private func existingRatingAlbums() -> [Int: PHAssetCollection] {
+        var albums: [Int: PHAssetCollection] = [:]
+        for rating in 1...5 {
+            if let album = fetchAlbum(named: ratingAlbumTitle(rating)) {
+                albums[rating] = album
+            }
+        }
+        return albums
+    }
+
+    private func fetchAlbum(named title: String) -> PHAssetCollection? {
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "title = %@", title)
+        return PHAssetCollection
+            .fetchAssetCollections(with: .album, subtype: .albumRegular, options: options)
+            .firstObject
+    }
+
+    private func ratingAlbum(_ album: PHAssetCollection, containsAssetID assetId: String) -> Bool {
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "localIdentifier = %@", assetId)
+        return PHAsset.fetchAssets(in: album, options: options).firstObject != nil
+    }
+
+    private func ratingAlbumTitle(_ rating: Int) -> String {
+        "Vesper - \(rating) Star\(rating == 1 ? "" : "s")"
+    }
 }
 
-// MARK: - Dislike reason sheet
+// MARK: - Rating reason sheet
 
 enum FeedbackReasonBuilder {
     static func combinedReason(suggestions: [String], selectedReasons: Set<String>, customText: String) -> String {
@@ -1739,7 +1838,7 @@ enum FeedbackReasonBuilder {
     }
 }
 
-struct DislikeReasonSheet: View {
+struct RatingReasonSheet: View {
     let onSubmit: (String) -> Void
 
     @State private var reasonText = ""
@@ -1765,7 +1864,7 @@ struct DislikeReasonSheet: View {
 
             VStack(spacing: 24) {
                 VStack(spacing: 6) {
-                    Text("What didn't you like?")
+                    Text("What should Vesper learn?")
                         .font(.title3.bold())
                         .foregroundStyle(.white)
                     Text("Vesper will learn from this for next time")

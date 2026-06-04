@@ -98,11 +98,11 @@ struct HistoryDetailView: View {
         purposeFilteredFeedback.filter(\.isNeutralSignal)
             .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt) }
     }
-    private var dislikedEmbeddings: [(embedding: [Float], date: Date)] {
+    private var lowRatedEmbeddings: [(embedding: [Float], date: Date)] {
         purposeFilteredFeedback.filter(\.isNegativeSignal)
             .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt) }
     }
-    private var dislikeReasonEmbeddings: [(embedding: [Float], date: Date)] {
+    private var lowRatingReasonEmbeddings: [(embedding: [Float], date: Date)] {
         purposeFilteredFeedback.filter(\.isNegativeSignal)
             .compactMap { f in f.reasonEmbedding.isEmpty ? nil : (f.reasonEmbedding, f.createdAt) }
     }
@@ -110,7 +110,7 @@ struct HistoryDetailView: View {
         purposeFilteredFeedback.filter(\.isPositiveSignal)
             .compactMap { f in f.contrastEmbedding.isEmpty ? nil : (f.contrastEmbedding, f.createdAt) }
     }
-    private var dislikeReasons: [String] {
+    private var lowRatingReasons: [String] {
         purposeFilteredFeedback.filter { $0.isNegativeSignal && !$0.reason.isEmpty }
             .map(\.reason)
     }
@@ -346,11 +346,11 @@ struct HistoryDetailView: View {
                     datingAudience: batch.isDatingMode ? batch.promptText : "",
                     likedEmbeddings: likedEmbeddings,
                     neutralEmbeddings: neutralEmbeddings,
-                    dislikedEmbeddings: dislikedEmbeddings,
-                    dislikeReasonEmbeddings: dislikeReasonEmbeddings,
+                    lowRatedEmbeddings: lowRatedEmbeddings,
+                    lowRatingReasonEmbeddings: lowRatingReasonEmbeddings,
                     contrastEmbeddings: contrastEmbeddings,
                     feedbackHistory: Array(purposeFilteredFeedback),
-                    dislikeReasons: dislikeReasons,
+                    lowRatingReasons: lowRatingReasons,
                     purposeTag: activePurposeTag,
                     userFaceEmbeddings: userFaceEmbeddings,
                     requireUniquePicks: true,

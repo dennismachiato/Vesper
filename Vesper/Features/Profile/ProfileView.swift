@@ -51,9 +51,9 @@ struct ProfileView: View {
     @State private var showExportShare = false
     @State private var exportFileURL: URL?
 
-    private var likedCount: Int { feedbackHistory.filter(\.isPositiveSignal).count }
+    private var highRatedCount: Int { feedbackHistory.filter(\.isPositiveSignal).count }
     private var neutralCount: Int { feedbackHistory.filter(\.isNeutralSignal).count }
-    private var dislikedCount: Int { feedbackHistory.filter(\.isNegativeSignal).count }
+    private var lowRatedCount: Int { feedbackHistory.filter(\.isNegativeSignal).count }
     private var multiPersonReferenceCount: Int { referencePhotos.filter { $0.faceCount > 1 }.count }
     private var clearSoloReferenceCount: Int {
         referencePhotos.filter { $0.faceCount == 1 && $0.sharpness >= 0.4 && $0.contrast >= 0.25 }.count
@@ -67,8 +67,8 @@ struct ProfileView: View {
     }
     private var learningSignalSummary: LearningSignalSummary {
         let rated = feedbackHistory.filter { $0.preferenceSignal != 0 }
-        let liked = rated.filter(\.isPositiveSignal)
-        let disliked = rated.filter(\.isNegativeSignal)
+        let highRated = rated.filter(\.isPositiveSignal)
+        let lowRated = rated.filter(\.isNegativeSignal)
         let recentCount = feedbackHistory.filter {
             Date().timeIntervalSince($0.createdAt) <= 30 * 86_400
         }.count
@@ -83,7 +83,7 @@ struct ProfileView: View {
             )
         }
 
-        guard !liked.isEmpty, !disliked.isEmpty else {
+        guard !highRated.isEmpty, !lowRated.isEmpty else {
             return LearningSignalSummary(
                 icon: "arrow.left.arrow.right",
                 title: "Needs contrast",
@@ -99,12 +99,12 @@ struct ProfileView: View {
         }
 
         let separations = [
-            abs(avg(liked, \.photoQualityScore) - avg(disliked, \.photoQualityScore)),
-            abs(avg(liked, \.photoExposureScore) - avg(disliked, \.photoExposureScore)),
-            abs(avg(liked, \.photoCompositionScore) - avg(disliked, \.photoCompositionScore)),
-            abs(avg(liked, \.photoGenuineSmileScore) - avg(disliked, \.photoGenuineSmileScore)),
-            abs(avg(liked, \.photoEyeOpenConfidence) - avg(disliked, \.photoEyeOpenConfidence)),
-            abs(avg(liked, \.photoColorHarmonyScore) - avg(disliked, \.photoColorHarmonyScore))
+            abs(avg(highRated, \.photoQualityScore) - avg(lowRated, \.photoQualityScore)),
+            abs(avg(highRated, \.photoExposureScore) - avg(lowRated, \.photoExposureScore)),
+            abs(avg(highRated, \.photoCompositionScore) - avg(lowRated, \.photoCompositionScore)),
+            abs(avg(highRated, \.photoGenuineSmileScore) - avg(lowRated, \.photoGenuineSmileScore)),
+            abs(avg(highRated, \.photoEyeOpenConfidence) - avg(lowRated, \.photoEyeOpenConfidence)),
+            abs(avg(highRated, \.photoColorHarmonyScore) - avg(lowRated, \.photoColorHarmonyScore))
         ]
         let separation = separations.reduce(0, +) / Float(separations.count)
         let evidence = min(Double(rated.count), 80)
@@ -143,22 +143,22 @@ struct ProfileView: View {
     }
     private var learnedPreferenceInsights: [LearningInsight] {
         let rated = feedbackHistory.filter { $0.preferenceSignal != 0 }
-        let liked = rated.filter(\.isPositiveSignal)
-        guard rated.count >= 2, !liked.isEmpty else { return [] }
+        let highRated = rated.filter(\.isPositiveSignal)
+        guard rated.count >= 2, !highRated.isEmpty else { return [] }
 
         func avg(_ values: [Float]) -> Float {
             guard !values.isEmpty else { return 0.5 }
             return values.reduce(0, +) / Float(values.count)
         }
 
-        let quality = avg(liked.map(\.photoQualityScore))
-        let exposure = avg(liked.map(\.photoExposureScore))
-        let smile = avg(liked.map(\.photoGenuineSmileScore))
-        let color = avg(liked.map(\.photoColorHarmonyScore))
-        let reference = avg(liked.map(\.photoReferenceScore))
-        let eye = avg(liked.map(\.photoEyeOpenConfidence))
+        let quality = avg(highRated.map(\.photoQualityScore))
+        let exposure = avg(highRated.map(\.photoExposureScore))
+        let smile = avg(highRated.map(\.photoGenuineSmileScore))
+        let color = avg(highRated.map(\.photoColorHarmonyScore))
+        let reference = avg(highRated.map(\.photoReferenceScore))
+        let eye = avg(highRated.map(\.photoEyeOpenConfidence))
         let closedEyeTolerance = BatchProcessor().learnedClosedEyeTolerance(from: Array(feedbackHistory))
-        let selfFaces = liked.filter(\.userFaceIdentified)
+        let selfFaces = highRated.filter(\.userFaceIdentified)
         let yaw = avg(selfFaces.map { abs($0.photoFaceYaw) })
 
         var insights: [LearningInsight] = []
@@ -177,7 +177,7 @@ struct ProfileView: View {
             insights.append(LearningInsight(icon: "paintpalette.fill", title: "Color harmony", detail: "Cohesive palettes are becoming part of your taste profile.", tint: .orange))
         }
         if reference >= 0.62 {
-            insights.append(LearningInsight(icon: "sparkles", title: "Reference style", detail: "Your liked photos are aligning with your saved references.", tint: Color.vesperAccent))
+            insights.append(LearningInsight(icon: "sparkles", title: "Reference style", detail: "Your highest-rated photos are aligning with your saved references.", tint: Color.vesperAccent))
         }
         if eye >= 0.78 {
             insights.append(LearningInsight(icon: "eye.fill", title: "Clear eyes", detail: "Open, visible eyes are a positive signal in your ratings.", tint: .blue))
@@ -351,9 +351,9 @@ struct ProfileView: View {
                         .padding(32)
                     } else {
                         HStack(spacing: 12) {
-                            feedbackStat(icon: "star.fill", value: likedCount, label: "4-5 Stars", color: .green)
+                            feedbackStat(icon: "star.fill", value: highRatedCount, label: "4-5 Stars", color: .green)
                             feedbackStat(icon: "star.leadinghalf.filled", value: neutralCount, label: "3 Stars", color: .orange)
-                            feedbackStat(icon: "star.slash.fill", value: dislikedCount, label: "1-2 Stars", color: .red)
+                            feedbackStat(icon: "star.slash.fill", value: lowRatedCount, label: "1-2 Stars", color: .red)
                         }
 
                         learningSignalCard
@@ -390,14 +390,14 @@ struct ProfileView: View {
                             .padding(.top, 2)
                         }
 
-                        let reasonedDislikes = feedbackHistory.filter { $0.isNegativeSignal && !$0.reason.isEmpty }
-                        if !reasonedDislikes.isEmpty {
+                        let reasonedLowRatings = feedbackHistory.filter { $0.isNegativeSignal && !$0.reason.isEmpty }
+                        if !reasonedLowRatings.isEmpty {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Recent feedback")
                                     .font(.caption)
                                     .foregroundStyle(.white.opacity(0.4))
 
-                                ForEach(reasonedDislikes.prefix(5)) { fb in
+                                ForEach(reasonedLowRatings.prefix(5)) { fb in
                                     HStack(spacing: 10) {
                                         Image(systemName: "hand.thumbsdown.fill")
                                             .font(.caption)
