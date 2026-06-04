@@ -37,6 +37,7 @@ struct ResultsView: View {
     @State private var runnerUps: [PhotoResult]
     @State private var deleteCandidates: [PhotoResult]
     @State private var similars: [PhotoResult]
+    @State private var targetTopPickCount: Int
     @State private var showRunnerUps = false
     @State private var showDeleteCandidates = false
     @State private var showSimilars = false
@@ -64,7 +65,7 @@ struct ResultsView: View {
     // count and would trigger the review prompt too early.
     @State private var didCountThisBatch = false
 
-    enum GalleryPool { case topPicks, runnerUps, deleteCandidates, similars }
+    enum GalleryPool { case topPicks, runnerUps, deleteCandidates, similars, ratingBucket(Int) }
 
     let isDatingMode: Bool
     let purposeTag: String
@@ -82,6 +83,7 @@ struct ResultsView: View {
         _runnerUps = State(initialValue: runnerUps)
         _deleteCandidates = State(initialValue: deleteCandidates)
         _similars = State(initialValue: similars)
+        _targetTopPickCount = State(initialValue: topPicks.count)
     }
 
     let columns = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
@@ -260,40 +262,48 @@ struct ResultsView: View {
                         }
 
                         if showRunnerUps {
-                            LazyVGrid(columns: columns, spacing: 6) {
-                                ForEach(Array(runnerUps.enumerated()), id: \.element.id) { index, result in
-                                    ZStack(alignment: .topTrailing) {
-                                        Image(uiImage: result.image)
-                                            .resizable()
-                                            .aspectRatio(result.image.safeAspectRatio, contentMode: .fit)
-                                            .frame(maxWidth: .infinity)
-                                            .clipShape(RoundedRectangle(cornerRadius: 13))
-                                            .onTapGesture {
-                                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                                galleryPool = .runnerUps
-                                                galleryStartIndex = index
+                            if runnerUps.isEmpty {
+                                Text("No separate alternates found. Near-duplicates and low-confidence picks are listed in the sections below.")
+                                    .font(.caption)
+                                    .foregroundStyle(.white.opacity(0.42))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.horizontal)
+                            } else {
+                                LazyVGrid(columns: columns, spacing: 6) {
+                                    ForEach(Array(runnerUps.enumerated()), id: \.element.id) { index, result in
+                                        ZStack(alignment: .topTrailing) {
+                                            Image(uiImage: result.image)
+                                                .resizable()
+                                                .aspectRatio(result.image.safeAspectRatio, contentMode: .fit)
+                                                .frame(maxWidth: .infinity)
+                                                .clipShape(RoundedRectangle(cornerRadius: 13))
+                                                .onTapGesture {
+                                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                                    galleryPool = .runnerUps
+                                                    galleryStartIndex = index
+                                                }
+                                            // Promote button: moves this photo to top picks and teaches the AI
+                                            Button {
+                                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                                withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                                                    promoteRunnerUp(at: index)
+                                                }
+                                            } label: {
+                                                ZStack {
+                                                    Circle()
+                                                        .fill(Color.black.opacity(0.45))
+                                                        .frame(width: 28, height: 28)
+                                                    Image(systemName: "plus.circle.fill")
+                                                        .font(.system(size: 24))
+                                                        .foregroundStyle(Color.vesperAccent)
+                                                }
                                             }
-                                        // Promote button: moves this photo to top picks and teaches the AI
-                                        Button {
-                                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                            withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
-                                                promoteRunnerUp(at: index)
-                                            }
-                                        } label: {
-                                            ZStack {
-                                                Circle()
-                                                    .fill(Color.black.opacity(0.45))
-                                                    .frame(width: 28, height: 28)
-                                                Image(systemName: "plus.circle.fill")
-                                                    .font(.system(size: 24))
-                                                    .foregroundStyle(Color.vesperAccent)
-                                            }
+                                            .padding(6)
                                         }
-                                        .padding(6)
                                     }
                                 }
+                                .padding(.horizontal)
                             }
-                            .padding(.horizontal)
 
                             if showPromotedToast {
                                 HStack(spacing: 8) {
@@ -621,6 +631,8 @@ struct ResultsView: View {
                         }
                     }
 
+                    ratingAlbumsSection
+
                     // Bottom actions
                     VStack(spacing: 10) {
                         if let onRerun {
@@ -692,34 +704,122 @@ struct ResultsView: View {
             get: { galleryStartIndex != nil },
             set: { if !$0 { dismissGallery() } }
         )) {
-            let photos: [PhotoResult] = {
-                switch galleryPool {
-                case .topPicks:         return topPicks
-                case .runnerUps:        return runnerUps
-                case .deleteCandidates: return deleteCandidates
-                case .similars:         return similars
-                }
-            }()
-            GalleryView(
-                photos: photos,
-                startIndex: galleryStartIndex ?? 0,
-                showReasoning: galleryPool == .topPicks || galleryPool == .runnerUps,
-                purposeTag: purposeTag,
-                allPhotoScores: topPicks + runnerUps,
-                onDelete: { index in
-                    switch galleryPool {
-                    case .topPicks:         topPicks.remove(at: index)
-                    case .runnerUps:        runnerUps.remove(at: index)
-                    case .deleteCandidates: deleteCandidates.remove(at: index)
-                    case .similars:         similars.remove(at: index)
-                    }
-                },
-                onFeedbackChange: { photoID, state in
-                    applyLiveFeedback(photoID: photoID, state: state)
-                }
-            ) {
+            galleryCover
+        }
+    }
+
+    private var galleryCover: some View {
+        let pool = galleryPool
+        let photos = galleryPhotos(for: pool)
+        let startIndex = galleryStartIndex ?? 0
+        let showReasoning = galleryShowsReasoning(pool)
+        let contextScores = topPicks + runnerUps
+
+        return GalleryView(
+            photos: photos,
+            startIndex: startIndex,
+            showReasoning: showReasoning,
+            purposeTag: purposeTag,
+            allPhotoScores: contextScores,
+            onDelete: { index in
+                handleGalleryDelete(index: index, pool: pool, galleryPhotos: photos)
+            },
+            onFeedbackChange: { photoID, state in
+                applyLiveFeedback(photoID: photoID, state: state)
+            },
+            onDismiss: {
                 dismissGallery()
             }
+        )
+    }
+
+    private func galleryPhotos(for pool: GalleryPool) -> [PhotoResult] {
+        switch pool {
+        case .topPicks: return topPicks
+        case .runnerUps: return runnerUps
+        case .deleteCandidates: return deleteCandidates
+        case .similars: return similars
+        case .ratingBucket(let rating): return ratedPhotos(starRating: rating)
+        }
+    }
+
+    private func galleryShowsReasoning(_ pool: GalleryPool) -> Bool {
+        switch pool {
+        case .topPicks, .runnerUps: return true
+        case .deleteCandidates, .similars, .ratingBucket: return false
+        }
+    }
+
+    private func handleGalleryDelete(index: Int, pool: GalleryPool, galleryPhotos: [PhotoResult]) {
+        switch pool {
+        case .topPicks:
+            guard topPicks.indices.contains(index) else { return }
+            topPicks.remove(at: index)
+        case .runnerUps:
+            guard runnerUps.indices.contains(index) else { return }
+            runnerUps.remove(at: index)
+        case .deleteCandidates:
+            guard deleteCandidates.indices.contains(index) else { return }
+            deleteCandidates.remove(at: index)
+        case .similars:
+            guard similars.indices.contains(index) else { return }
+            similars.remove(at: index)
+        case .ratingBucket:
+            guard galleryPhotos.indices.contains(index) else { return }
+            let photoID = galleryPhotos[index].id
+            removePhotoFromAllPools(photoID: photoID)
+        }
+    }
+
+    private var ratingAlbumsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Rating Albums")
+                    .font(.title2.bold())
+                    .foregroundStyle(.white)
+                Text("Open the photos you rated in this batch")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+            .padding(.horizontal)
+
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8),
+                GridItem(.flexible(), spacing: 8)
+            ], spacing: 8) {
+                ForEach((1...5).reversed(), id: \.self) { rating in
+                    let photos = ratedPhotos(starRating: rating)
+                    Button {
+                        guard !photos.isEmpty else { return }
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        galleryPool = .ratingBucket(rating)
+                        galleryStartIndex = 0
+                    } label: {
+                        VStack(spacing: 6) {
+                            Image(systemName: ratingAlbumIcon(rating))
+                                .font(.system(size: 18, weight: .semibold))
+                            Text("\(rating)")
+                                .font(.headline.monospacedDigit())
+                            Text("\(photos.count)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.white.opacity(0.52))
+                        }
+                        .foregroundStyle(photos.isEmpty ? .white.opacity(0.24) : ratingTint(rating))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 82)
+                        .background(ratingTint(rating).opacity(photos.isEmpty ? 0.04 : 0.10))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(ratingTint(rating).opacity(photos.isEmpty ? 0.08 : 0.20), lineWidth: 1))
+                    }
+                    .disabled(photos.isEmpty)
+                    .accessibilityLabel("\(rating) star photos")
+                    .accessibilityValue("\(photos.count) photo\(photos.count == 1 ? "" : "s")")
+                }
+            }
+            .padding(.horizontal)
         }
     }
 
@@ -727,6 +827,7 @@ struct ResultsView: View {
         galleryStartIndex = nil
         guard hasDeferredRerank else { return }
         hasDeferredRerank = false
+        applyFeedbackDrivenPoolChanges()
         rerankTopAndReviewPools()
         withAnimation(.spring(response: 0.35)) { showRerankedToast = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
@@ -739,6 +840,44 @@ struct ResultsView: View {
         galleryStartIndex = index
     }
 
+    private var allVisibleResults: [PhotoResult] {
+        uniqueResults(topPicks + runnerUps + deleteCandidates + similars)
+    }
+
+    private func ratedPhotos(starRating: Int) -> [PhotoResult] {
+        allVisibleResults.filter { result in
+            sessionFeedback[result.id]?.starRating == starRating
+        }
+    }
+
+    private func uniqueResults(_ results: [PhotoResult]) -> [PhotoResult] {
+        var seen = Set<UUID>()
+        var unique: [PhotoResult] = []
+        for result in results where !seen.contains(result.id) {
+            seen.insert(result.id)
+            unique.append(result)
+        }
+        return unique
+    }
+
+    private func ratingTint(_ rating: Int) -> Color {
+        switch rating {
+        case 5: return .green
+        case 4: return Color.vesperAccent
+        case 3: return .orange
+        default: return .red
+        }
+    }
+
+    private func ratingAlbumIcon(_ rating: Int) -> String {
+        switch rating {
+        case 5: return "star.fill"
+        case 4: return "star.leadinghalf.filled"
+        case 3: return "star"
+        default: return "star.slash.fill"
+        }
+    }
+
     private func applyLiveFeedback(photoID: UUID, state: GalleryView.FeedbackState?) {
         if let state {
             sessionFeedback[photoID] = state
@@ -746,14 +885,14 @@ struct ResultsView: View {
             sessionFeedback.removeValue(forKey: photoID)
         }
 
-        guard topPicks.contains(where: { $0.id == photoID }) ||
-              runnerUps.contains(where: { $0.id == photoID }) else { return }
+        guard allVisibleResults.contains(where: { $0.id == photoID }) else { return }
 
         if galleryStartIndex != nil {
             hasDeferredRerank = true
             return
         }
 
+        applyFeedbackDrivenPoolChanges()
         rerankTopAndReviewPools()
         withAnimation(.spring(response: 0.35)) { showRerankedToast = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
@@ -762,9 +901,9 @@ struct ResultsView: View {
     }
 
     private func rerankTopAndReviewPools() {
-        let targetTopCount = max(1, topPicks.count)
         let combined = topPicks + runnerUps
         guard combined.count > 1 else { return }
+        let targetTopCount = max(1, min(targetTopPickCount, combined.count))
 
         let sorted = combined.sorted {
             liveAdjustedScore($0) > liveAdjustedScore($1)
@@ -788,6 +927,76 @@ struct ResultsView: View {
             }
         }
         return score
+    }
+
+    private func applyFeedbackDrivenPoolChanges() {
+        var changedDeleteSelection = false
+        var changedSimilarSelection = false
+
+        for (photoID, state) in sessionFeedback {
+            guard let result = findResult(photoID: photoID) else { continue }
+            let rating = state.starRating
+
+            switch rating {
+            case 4...5:
+                if removePhoto(photoID: photoID, from: &deleteCandidates) { changedDeleteSelection = true }
+                if removePhoto(photoID: photoID, from: &similars) { changedSimilarSelection = true }
+                if !topPicks.contains(where: { $0.id == photoID }) &&
+                   !runnerUps.contains(where: { $0.id == photoID }) {
+                    runnerUps.append(result)
+                }
+            case 3:
+                if removePhoto(photoID: photoID, from: &deleteCandidates) { changedDeleteSelection = true }
+                if !topPicks.contains(where: { $0.id == photoID }) &&
+                   !runnerUps.contains(where: { $0.id == photoID }) &&
+                   !similars.contains(where: { $0.id == photoID }) {
+                    runnerUps.append(result)
+                }
+            default:
+                if removePhoto(photoID: photoID, from: &topPicks) {
+                    targetTopPickCount = max(targetTopPickCount, initialTopPicks.count)
+                }
+                removePhoto(photoID: photoID, from: &runnerUps)
+                if removePhoto(photoID: photoID, from: &similars) { changedSimilarSelection = true }
+                if !deleteCandidates.contains(where: { $0.id == photoID }) {
+                    deleteCandidates.append(result)
+                    changedDeleteSelection = true
+                }
+            }
+        }
+
+        if changedDeleteSelection {
+            selectedDeleteIndices = []
+            isMultiSelectingDeletes = false
+        }
+        if changedSimilarSelection {
+            selectedSimilarIndices = []
+            isMultiSelectingSimilars = false
+        }
+    }
+
+    @discardableResult
+    private func removePhoto(photoID: UUID, from results: inout [PhotoResult]) -> Bool {
+        let oldCount = results.count
+        results.removeAll { $0.id == photoID }
+        return results.count != oldCount
+    }
+
+    private func removePhotoFromAllPools(photoID: UUID) {
+        removePhoto(photoID: photoID, from: &topPicks)
+        removePhoto(photoID: photoID, from: &runnerUps)
+        removePhoto(photoID: photoID, from: &deleteCandidates)
+        removePhoto(photoID: photoID, from: &similars)
+        sessionFeedback.removeValue(forKey: photoID)
+        selectedDeleteIndices = []
+        selectedSimilarIndices = []
+    }
+
+    private func findResult(photoID: UUID) -> PhotoResult? {
+        topPicks.first { $0.id == photoID } ??
+        runnerUps.first { $0.id == photoID } ??
+        deleteCandidates.first { $0.id == photoID } ??
+        similars.first { $0.id == photoID }
     }
 
     // MARK: - Bulk actions
@@ -922,6 +1131,7 @@ struct ResultsView: View {
         guard index < runnerUps.count else { return }
         let result = runnerUps.remove(at: index)
         topPicks.append(result)
+        targetTopPickCount = max(targetTopPickCount, topPicks.count)
 
         // Save positive feedback so the AI learns the user preferred this photo
         Task {
