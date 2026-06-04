@@ -66,7 +66,7 @@ struct AITrainingView: View {
                 ratingView
             }
         }
-        .navigationTitle("Test the AI")
+        .navigationTitle("Teach Vesper")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .alert("Feedback Not Saved", isPresented: .init(
@@ -98,7 +98,7 @@ struct AITrainingView: View {
                     .font(.title2.bold())
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
-                Text("Pick a recent batch of similar photos, then rate each one from 1 to 5 stars. This trains your local preference profile without uploading photos.")
+                Text("Pick a recent batch of similar photos, then rate each one with stars. Vesper updates your local preference profile without uploading photos.")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.55))
                     .multilineTextAlignment(.center)

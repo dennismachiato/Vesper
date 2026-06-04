@@ -60,6 +60,7 @@ struct ResultsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.requestReview) private var requestReview
     @AppStorage("completedBatchCount") private var completedBatchCount = 0
+    @AppStorage("autoCreateRatingAlbums") private var autoCreateRatingAlbums = true
     // Ensures `completedBatchCount` only increments once per ResultsView
     // instance — a re-appear from a pushed detail view otherwise inflates the
     // count and would trigger the review prompt too early.
@@ -163,6 +164,8 @@ struct ResultsView: View {
                         }
                     }
 
+                    guidedReviewSection
+
                     if isDatingMode {
                         // Dating mode: uniform 3-column grid — no oversized hero
                         let datingColumns = [GridItem(.flexible(), spacing: 6),
@@ -241,9 +244,10 @@ struct ResultsView: View {
                                     Text("Worth Reviewing")
                                         .font(.title2.bold())
                                         .foregroundStyle(.white)
-                                    Text("Good alternates the AI did not rank as top picks — tap \(Image(systemName: "plus.circle.fill")) to promote")
+                                    Text("Strong alternates Vesper kept close. Tap \(Image(systemName: "plus.circle.fill")) to promote.")
                                         .font(.caption)
                                         .foregroundStyle(.white.opacity(0.4))
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                                 Spacer()
                                 Text("\(runnerUps.count)")
@@ -282,7 +286,7 @@ struct ResultsView: View {
                                                     galleryPool = .runnerUps
                                                     galleryStartIndex = index
                                                 }
-                                            // Promote button: moves this photo to top picks and teaches the AI
+                                            // Promote button: moves this photo to top picks and saves positive preference signal.
                                             Button {
                                                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                                                 withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
@@ -309,7 +313,7 @@ struct ResultsView: View {
                                 HStack(spacing: 8) {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundStyle(Color.vesperAccent)
-                                    Text("Added to top picks · AI will learn from this")
+                                    Text("Added to top picks · Vesper will learn from this")
                                         .font(.caption)
                                         .foregroundStyle(.white.opacity(0.8))
                                 }
@@ -345,9 +349,10 @@ struct ResultsView: View {
                                                 .font(.title2.bold())
                                                 .foregroundStyle(.white)
                                         }
-                                        Text("Weakest cleanup picks, blurry shots, or closed eyes")
+                                        Text("Low-rated or weak cleanup picks. Review before deleting.")
                                             .font(.caption)
                                             .foregroundStyle(.white.opacity(0.4))
+                                            .fixedSize(horizontal: false, vertical: true)
                                     }
                                     Spacer()
                                     Text("\(deleteCandidates.count)")
@@ -708,6 +713,95 @@ struct ResultsView: View {
         }
     }
 
+    private var guidedReviewSection: some View {
+        let rated = ratedPhotoCount
+        let total = max(allVisibleResults.count, 1)
+        let cleanupCount = deleteCandidates.count + similars.count
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: "checklist.checked")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.vesperAccent)
+                    .frame(width: 28, height: 28)
+                    .background(Color.vesperAccent.opacity(0.12))
+                    .clipShape(Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Review this batch")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.white)
+                    Text(nextReviewStepText)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.48))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Text("\(rated)/\(total)")
+                    .font(.caption.bold().monospacedDigit())
+                    .foregroundStyle(Color.vesperAccent.opacity(0.9))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(Color.vesperAccent.opacity(0.12))
+                    .clipShape(Capsule())
+                    .accessibilityLabel("\(rated) of \(total) photos rated")
+            }
+
+            HStack(spacing: 8) {
+                reviewStepChip(icon: "star.fill", title: "Rate", value: "\(rated)", tint: Color.vesperAccent)
+                reviewStepChip(icon: "folder", title: "Sort", value: "\(ratedPhotoCount)", tint: .green)
+                reviewStepChip(icon: "trash", title: "Clean", value: "\(cleanupCount)", tint: .red)
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.045))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .padding(.horizontal)
+    }
+
+    private func reviewStepChip(icon: String, title: String, value: String, tint: Color) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(tint)
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(1)
+                Text(value)
+                    .font(.caption.bold().monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.86))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity)
+        .background(tint.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(tint.opacity(0.14), lineWidth: 1))
+    }
+
+    private var ratedPhotoCount: Int {
+        sessionFeedback.values.count
+    }
+
+    private var nextReviewStepText: String {
+        if ratedPhotoCount == 0 {
+            return "Open photos, rate with stars, then use the sections below to save or clean up."
+        }
+        if !deleteCandidates.isEmpty {
+            return "Low ratings move photos into deletion review so you can decide before removing anything."
+        }
+        if !runnerUps.isEmpty {
+            return "Check alternates next, then use star ratings to sort the batch."
+        }
+        return "Your ratings are saved. Review star groups or start another batch."
+    }
+
     private var galleryCover: some View {
         let pool = galleryPool
         let photos = galleryPhotos(for: pool)
@@ -773,14 +867,40 @@ struct ResultsView: View {
 
     private var ratingAlbumsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Rating Albums")
-                    .font(.title2.bold())
-                    .foregroundStyle(.white)
-                Text("Open the photos you rated in this batch")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.4))
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Star Ratings")
+                        .font(.title2.bold())
+                        .foregroundStyle(.white)
+                    Text("Open this batch by rating. Photos albums are optional.")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.4))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Toggle("", isOn: $autoCreateRatingAlbums)
+                    .labelsHidden()
+                    .tint(Color.vesperAccent)
+                    .accessibilityLabel("Create Photos albums automatically")
             }
+            .padding(.horizontal)
+
+            HStack(spacing: 8) {
+                Image(systemName: autoCreateRatingAlbums ? "folder.badge.plus" : "folder")
+                    .font(.caption)
+                    .foregroundStyle(Color.vesperAccent.opacity(0.8))
+                    .frame(width: 18)
+                Text(autoCreateRatingAlbums ? "Rated photos are added to Vesper star albums in Photos." : "Star ratings stay in Vesper unless you turn albums back on.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+            }
+            .padding(12)
+            .background(Color.white.opacity(0.045))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08), lineWidth: 1))
             .padding(.horizontal)
 
             LazyVGrid(columns: [
@@ -1133,7 +1253,7 @@ struct ResultsView: View {
         topPicks.append(result)
         targetTopPickCount = max(targetTopPickCount, topPicks.count)
 
-        // Save positive feedback so the AI learns the user preferred this photo
+        // Save positive feedback so future batches understand this preference.
         Task {
             let imageEmb: [Float]
             if let embedder = CLIPEmbedder.shared,
@@ -1250,6 +1370,7 @@ struct GalleryView: View {
     @State private var reasonPhotoID: UUID?
     @AppStorage("hasAnsweredPhotoShare") private var hasAnsweredPhotoShare = false
     @AppStorage("photoShareOptIn") private var photoShareOptIn = false
+    @AppStorage("autoCreateRatingAlbums") private var autoCreateRatingAlbums = true
     @Environment(\.modelContext) private var modelContext
 
     enum FeedbackState: Equatable {
@@ -2020,6 +2141,7 @@ struct GalleryView: View {
     }
 
     private func addToRatingAlbumIfPossible(result: PhotoResult, rating: Int) {
+        guard autoCreateRatingAlbums else { return }
         let assetId = result.assetIdentifier
         guard !assetId.isEmpty else { return }
 
