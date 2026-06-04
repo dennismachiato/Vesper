@@ -124,7 +124,7 @@ struct ResultsView: View {
                             Text(isDatingMode ? "Best Dating Photos" : "Top Picks")
                                 .font(.title2.bold())
                                 .foregroundStyle(.white)
-                            Text("Tap a photo to view · Rate with 1-5 stars to train Vesper")
+                            Text("Tap a photo to view · Rate with stars to teach Vesper")
                                 .font(.caption)
                                 .foregroundStyle(.white.opacity(0.4))
                         }
@@ -1226,6 +1226,7 @@ struct GalleryView: View {
     @State private var currentIndex: Int
     @State private var feedbackSaved: [UUID: FeedbackState] = [:]
     @State private var feedbackRecords: [UUID: PhotoFeedback] = [:]
+    @State private var feedbackReasons: [UUID: String] = [:]
     @State private var savingFeedbackIDs: Set<UUID> = []
     @State private var showDeleteConfirm = false
     @State private var showDeleteFromLibraryConfirm = false
@@ -1246,6 +1247,7 @@ struct GalleryView: View {
     @State private var pendingFeedbackRating = 5
     @State private var pendingFeedbackReason = ""
     @State private var pendingFeedbackPhotoID: UUID?
+    @State private var reasonPhotoID: UUID?
     @AppStorage("hasAnsweredPhotoShare") private var hasAnsweredPhotoShare = false
     @AppStorage("photoShareOptIn") private var photoShareOptIn = false
     @Environment(\.modelContext) private var modelContext
@@ -1602,17 +1604,39 @@ struct GalleryView: View {
                 showPhotoSharePrompt = false
             }
         }
+        .sheet(isPresented: Binding(
+            get: { reasonPhotoID != nil },
+            set: { if !$0 { reasonPhotoID = nil } }
+        )) {
+            if let photoID = reasonPhotoID,
+               let result = photos.first(where: { $0.id == photoID }) {
+                RatingReasonSheet(initialText: feedbackReasons[photoID] ?? "") { reason in
+                    let rating = feedbackSaved[photoID]?.starRating ?? 0
+                    if rating > 0 {
+                        saveStarRating(
+                            rating,
+                            reason: reason,
+                            result: result,
+                            showToast: true,
+                            allowUploadPrompt: false
+                        )
+                    }
+                    reasonPhotoID = nil
+                }
+            }
+        }
     }
 
     private func starRatingControl(result: PhotoResult) -> some View {
         let rating = feedbackSaved[result.id]?.starRating ?? 0
         let isSaving = savingFeedbackIDs.contains(result.id)
+        let savedReason = feedbackReasons[result.id] ?? ""
 
         return VStack(spacing: 8) {
             HStack(spacing: 10) {
                 ForEach(1...5, id: \.self) { star in
                     Button {
-                        saveStarRating(star, result: result)
+                        saveStarRating(star, reason: savedReason, result: result)
                     } label: {
                         Image(systemName: star <= rating ? "star.fill" : "star")
                             .font(.system(size: 25, weight: .semibold))
@@ -1636,6 +1660,38 @@ struct GalleryView: View {
                 Text(rating == 0 ? "Rate this photo" : ratingLabel(rating))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(rating == 0 ? .white.opacity(0.45) : ratingTint(rating).opacity(0.9))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+
+            if rating > 0 {
+                Button {
+                    reasonPhotoID = result.id
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: savedReason.isEmpty ? "plus.bubble" : "pencil")
+                            .font(.caption2.weight(.bold))
+                        Text(savedReason.isEmpty ? "Add note" : "Edit note")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .foregroundStyle(.white.opacity(0.58))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.05))
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                }
+                .disabled(isSaving)
+                .accessibilityHint("Add optional context for this star rating")
+
+                if !savedReason.isEmpty {
+                    Text(savedReason)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.38))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .padding(.horizontal, 16)
+                }
             }
         }
         .frame(maxWidth: .infinity)
@@ -1678,6 +1734,7 @@ struct GalleryView: View {
         pendingFeedbackUploadTasks[result.id]?.cancel()
         pendingFeedbackUploadTasks[result.id] = nil
         let rating = min(max(starRating, 1), 5)
+        let cleanReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         let liked = rating >= 4
         let isNeutral = rating == 3
         let feedbackStyle: UINotificationFeedbackGenerator.FeedbackType = liked ? .success : (isNeutral ? .warning : .error)
@@ -1691,6 +1748,7 @@ struct GalleryView: View {
         let previousImage = index > 0 ? photos[index - 1].image : nil
         let previousState = feedbackSaved[result.id]
         let previousRecord = feedbackRecords[result.id]
+        let previousReason = feedbackReasons[result.id]
         let isCorrection = previousState != nil
         feedbackSaved[result.id] = .rated(rating)
         savingFeedbackIDs.insert(result.id)
@@ -1705,9 +1763,9 @@ struct GalleryView: View {
             }
 
             let reasonEmb: [Float]
-            if !reason.isEmpty,
+            if !cleanReason.isEmpty,
                let textEmbedder = CLIPTextEmbedder.shared,
-               let embedding = await textEmbedder.embedAsync(prompt: reason) {
+               let embedding = await textEmbedder.embedAsync(prompt: cleanReason) {
                 reasonEmb = embedding
             } else {
                 reasonEmb = []
@@ -1724,7 +1782,7 @@ struct GalleryView: View {
             }
 
             let feedback = PhotoFeedback(
-                liked: liked, isNeutral: isNeutral, reason: reason,
+                liked: liked, isNeutral: isNeutral, reason: cleanReason,
                 imageEmbedding: imageEmb, reasonEmbedding: reasonEmb,
                 purposeTag: purposeTag,
                 qualityScore: result.qualityScore,
@@ -1747,12 +1805,18 @@ struct GalleryView: View {
             do {
                 try modelContext.save()
                 feedbackRecords[result.id] = feedback
+                if cleanReason.isEmpty {
+                    feedbackReasons.removeValue(forKey: result.id)
+                } else {
+                    feedbackReasons[result.id] = cleanReason
+                }
                 didSave = true
                 onFeedbackChange(result.id, .rated(rating))
             } catch {
                 modelContext.rollback()
                 feedbackSaved[result.id] = previousState
                 feedbackRecords[result.id] = previousRecord
+                feedbackReasons[result.id] = previousReason
                 resultsLogger.error("Save photo feedback failed: \(error.localizedDescription, privacy: .private)")
             }
             savingFeedbackIDs.remove(result.id)
@@ -1762,11 +1826,11 @@ struct GalleryView: View {
 
             if allowUploadPrompt {
                 if hasAnsweredPhotoShare, photoShareOptIn {
-                    queueFeedbackUpload(photoID: result.id, starRating: rating, reason: reason, result: result,
+                    queueFeedbackUpload(photoID: result.id, starRating: rating, reason: cleanReason, result: result,
                                         thumbnail: result.image)
                 } else if !isCorrection {
                     pendingFeedbackRating = rating
-                    pendingFeedbackReason = reason
+                    pendingFeedbackReason = cleanReason
                     pendingFeedbackPhotoID = result.id
                     showPhotoSharePrompt = !hasAnsweredPhotoShare
                 }
@@ -1789,8 +1853,10 @@ struct GalleryView: View {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         let previousState = feedbackSaved[result.id]
         let previousRecord = feedbackRecords[result.id]
+        let previousReason = feedbackReasons[result.id]
         feedbackSaved[result.id] = nil
         feedbackRecords[result.id] = nil
+        feedbackReasons.removeValue(forKey: result.id)
         savingFeedbackIDs.insert(result.id)
 
         Task {
@@ -1805,6 +1871,7 @@ struct GalleryView: View {
                 modelContext.rollback()
                 feedbackSaved[result.id] = previousState
                 feedbackRecords[result.id] = previousRecord
+                feedbackReasons[result.id] = previousReason
                 resultsLogger.error("Undo photo feedback failed: \(error.localizedDescription, privacy: .private)")
             }
             savingFeedbackIDs.remove(result.id)
@@ -2056,9 +2123,15 @@ struct RatingReasonSheet: View {
     @FocusState private var isFocused: Bool
 
     private let suggestions = [
-        "Eyes closed", "Bad angle", "Blurry", "Expression is off",
-        "Lighting is bad", "Looking at camera", "Not the vibe"
+        "Great expression", "Awkward expression", "Good angle", "Bad angle",
+        "Good lighting", "Poor lighting", "Blurry", "Background",
+        "Matches my style", "Not my style", "Eyes", "Pose"
     ]
+
+    init(initialText: String = "", onSubmit: @escaping (String) -> Void) {
+        self.onSubmit = onSubmit
+        _reasonText = State(initialValue: initialText)
+    }
 
     private var combinedReason: String {
         FeedbackReasonBuilder.combinedReason(
@@ -2074,16 +2147,19 @@ struct RatingReasonSheet: View {
 
             VStack(spacing: 24) {
                 VStack(spacing: 6) {
-                    Text("What should Vesper learn?")
+                    Text("Add rating notes")
                         .font(.title3.bold())
                         .foregroundStyle(.white)
-                    Text("Vesper will learn from this for next time")
+                    Text("Optional notes help Vesper understand this rating.")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.45))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.top, 32)
+                .padding(.horizontal, 24)
 
-                TextField("Add more detail...", text: $reasonText, axis: .vertical)
+                TextField("Add a quick note...", text: $reasonText, axis: .vertical)
                     .lineLimit(2...4)
                     .font(.body)
                     .foregroundStyle(.white)
@@ -2136,14 +2212,14 @@ struct RatingReasonSheet: View {
                         isFocused = false
                         onSubmit(combinedReason)
                     } label: {
-                        Text("Submit Feedback")
+                        Text("Save Notes")
                             .vesperPrimaryButton()
                     }
 
                     Button {
                         onSubmit("")
                     } label: {
-                        Text("Skip")
+                        Text("Clear Notes")
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.4))
                     }

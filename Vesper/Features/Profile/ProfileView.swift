@@ -351,9 +351,9 @@ struct ProfileView: View {
                         .padding(32)
                     } else {
                         HStack(spacing: 12) {
-                            feedbackStat(icon: "star.fill", value: highRatedCount, label: "4-5 Stars", color: .green)
-                            feedbackStat(icon: "star.leadinghalf.filled", value: neutralCount, label: "3 Stars", color: .orange)
-                            feedbackStat(icon: "star.slash.fill", value: lowRatedCount, label: "1-2 Stars", color: .red)
+                            feedbackStat(icon: "star.fill", value: highRatedCount, label: "4-5", color: .green)
+                            feedbackStat(icon: "star.leadinghalf.filled", value: neutralCount, label: "3", color: .orange)
+                            feedbackStat(icon: "star.slash.fill", value: lowRatedCount, label: "1-2", color: .red)
                         }
 
                         learningSignalCard
@@ -479,13 +479,16 @@ struct ProfileView: View {
                     }
 
                     VStack(spacing: 8) {
-                        Text("AI is learning your style")
+                        Text("Vesper is learning your style")
                             .font(.title3.bold())
                             .foregroundStyle(.white)
-                        Text("Analyzing lighting, color, sharpness,\nposes and composition preferences")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+                        Text("Analyzing lighting, color, sharpness, pose, and composition.")
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.55))
                             .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     VStack(spacing: 8) {
@@ -518,19 +521,23 @@ struct ProfileView: View {
     }
 
     private func feedbackStat(icon: String, value: Int, label: String, color: Color) -> some View {
-        HStack(spacing: 12) {
+        VStack(spacing: 8) {
             Image(systemName: icon)
                 .font(.title3)
                 .foregroundStyle(color)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(value)")
-                    .font(.title2.bold())
-                    .foregroundStyle(.white)
-                Text(label)
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.45))
-            }
-            Spacer()
+            Text("\(value)")
+                .font(.title2.bold())
+                .foregroundStyle(.white)
+                .monospacedDigit()
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.45))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Text("Stars")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.32))
+                .lineLimit(1)
         }
         .padding(16)
         .background(color.opacity(0.09))
