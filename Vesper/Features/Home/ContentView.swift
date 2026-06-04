@@ -37,7 +37,7 @@ struct HomeView: View {
                         Text("Vesper")
                             .font(.system(size: 56, weight: .bold))
                             .foregroundStyle(LinearGradient.vesperGold)
-                        Text("Find your best shots")
+                        Text("Rank, rate, and organize your photos")
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.45))
                     }
@@ -71,11 +71,11 @@ struct HomeView: View {
                             }
 
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(referencePhotos.isEmpty ? "Set up your style" : "Your style")
+                                Text(referencePhotos.isEmpty ? "Set up your style" : "Your style profile")
                                     .font(.subheadline.bold())
                                     .foregroundStyle(.white)
                                 Text(referencePhotos.isEmpty
-                                     ? "Add reference photos to improve results"
+                                     ? "Add reference photos to improve matching"
                                      : "\(referencePhotos.count) reference photo\(referencePhotos.count == 1 ? "" : "s")")
                                     .font(.caption)
                                     .foregroundStyle(.white.opacity(0.45))
@@ -147,7 +147,7 @@ struct HomeView: View {
                                 ForEach([
                                     ("1", "photo.stack", "Pick 10–50 similar photos", "Burst shots, event photos, anything you want to sort through"),
                                     ("2", "sparkles", "Vesper ranks them privately", "Scored by sharpness, faces, expression, and your style on-device"),
-                                    ("3", "checkmark.circle", "Keep the best, review the rest", "Rate photos from 1 to 5 stars to help Vesper learn your taste")
+                                    ("3", "star.circle", "Rate and sort the batch", "Use 1-5 stars to organize photos and teach Vesper your taste")
                                 ], id: \.0) { _, icon, title, subtitle in
                                     HStack(alignment: .top, spacing: 12) {
                                         Image(systemName: icon)
@@ -188,7 +188,7 @@ struct HomeView: View {
                                 else if photoService.isDenied { showPhotoAccessDenied = true }
                             }
                         } label: {
-                            Text("New Batch")
+                            Text("Sort New Batch")
                                 .vesperPrimaryButton()
                         }
 
@@ -225,7 +225,7 @@ struct HomeView: View {
                             HStack(spacing: 8) {
                                 Image(systemName: "brain.head.profile")
                                     .font(.subheadline)
-                                Text("Teach Vesper")
+                                Text("Test & Teach Vesper")
                                     .font(.subheadline.weight(.semibold))
                             }
                             .foregroundStyle(Color.vesperAccent.opacity(0.9))

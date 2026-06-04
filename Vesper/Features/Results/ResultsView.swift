@@ -44,8 +44,10 @@ struct ResultsView: View {
     @State private var galleryStartIndex: Int? = nil
     @State private var galleryPool: GalleryPool = .topPicks
     @State private var showAlbumSavedToast = false
+    @State private var albumToastText = "Saved to Photos album"
     @State private var showPromotedToast = false
     @State private var showRerankedToast = false
+    @State private var isSyncingRatingAlbums = false
     @State private var hasDeferredRerank = false
     @State private var sessionFeedback: [UUID: GalleryView.FeedbackState] = [:]
     @Environment(\.modelContext) private var modelContext
@@ -154,7 +156,7 @@ struct ResultsView: View {
                             HStack(spacing: 6) {
                                 Image(systemName: showAlbumSavedToast ? "checkmark.circle.fill" : "arrow.up.arrow.down.circle.fill")
                                     .foregroundStyle(showAlbumSavedToast ? .green : Color.vesperAccent)
-                                Text(showAlbumSavedToast ? "Saved to Photos album" : "Results updated from your feedback")
+                                Text(showAlbumSavedToast ? albumToastText : "Results updated from your feedback")
                                     .font(.caption.bold())
                             }
                             .padding(.horizontal, 14).padding(.vertical, 9)
@@ -235,6 +237,7 @@ struct ResultsView: View {
                     }
 
                     // Runner Ups
+                    if !runnerUps.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         Button {
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -326,6 +329,7 @@ struct ResultsView: View {
                                 .transition(.opacity.combined(with: .move(edge: .bottom)))
                             }
                         }
+                    }
                     }
 
                     // Delete candidates section
@@ -878,12 +882,36 @@ struct ResultsView: View {
                     Text("Star Ratings")
                         .font(.title2.bold())
                         .foregroundStyle(.white)
-                    Text("Open this batch by rating. Photos albums are optional.")
+                    Text("Open photos by rating or sync them into Photos albums.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.4))
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    syncRatedPhotosToAlbums()
+                } label: {
+                    HStack(spacing: 5) {
+                        if isSyncingRatingAlbums {
+                            ProgressView()
+                                .scaleEffect(0.62)
+                                .tint(.black)
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .font(.caption.bold())
+                        }
+                        Text("Sync")
+                            .font(.caption.bold())
+                    }
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(ratedPhotoCount == 0 ? Color.white.opacity(0.24) : Color.vesperAccent)
+                    .clipShape(Capsule())
+                }
+                .disabled(ratedPhotoCount == 0 || isSyncingRatingAlbums)
+                .accessibilityLabel("Sync rated photos to Photos albums")
                 Toggle("", isOn: $autoCreateRatingAlbums)
                     .labelsHidden()
                     .tint(Color.vesperAccent)
@@ -896,10 +924,9 @@ struct ResultsView: View {
                     .font(.caption)
                     .foregroundStyle(Color.vesperAccent.opacity(0.8))
                     .frame(width: 18)
-                Text(autoCreateRatingAlbums ? "Rated photos are added to Vesper star albums in Photos." : "Star ratings stay in Vesper unless you turn albums back on.")
+                Text(autoCreateRatingAlbums ? "New ratings are added to Vesper star albums automatically. Sync backfills this batch." : "Star ratings stay in Vesper unless you turn albums back on or tap Sync.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.45))
-                    .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer()
             }
@@ -932,16 +959,21 @@ struct ResultsView: View {
                             Text("\(photos.count)")
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.white.opacity(0.52))
+                            Text(photos.count == 1 ? "photo" : "photos")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.34))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
                         }
                         .foregroundStyle(photos.isEmpty ? .white.opacity(0.24) : ratingTint(rating))
                         .frame(maxWidth: .infinity)
-                        .frame(height: 82)
+                        .frame(height: 94)
                         .background(ratingTint(rating).opacity(photos.isEmpty ? 0.04 : 0.10))
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .overlay(RoundedRectangle(cornerRadius: 12).stroke(ratingTint(rating).opacity(photos.isEmpty ? 0.08 : 0.20), lineWidth: 1))
                     }
                     .disabled(photos.isEmpty)
-                    .accessibilityLabel("\(rating) star photos")
+                    .accessibilityLabel("\(rating) star group")
                     .accessibilityValue("\(photos.count) photo\(photos.count == 1 ? "" : "s")")
                 }
             }
@@ -1160,6 +1192,7 @@ struct ResultsView: View {
             }) { success2, _ in
                 DispatchQueue.main.async {
                     if success2 {
+                        albumToastText = "Saved top picks to Photos"
                         withAnimation(.spring(response: 0.4)) { showAlbumSavedToast = true }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                             withAnimation { showAlbumSavedToast = false }
@@ -1168,6 +1201,108 @@ struct ResultsView: View {
                 }
             }
         }
+    }
+
+    private func syncRatedPhotosToAlbums() {
+        let assignments = allVisibleResults.compactMap { result -> (assetId: String, rating: Int)? in
+            guard let rating = sessionFeedback[result.id]?.starRating,
+                  !result.assetIdentifier.isEmpty else { return nil }
+            return (result.assetIdentifier, rating)
+        }
+        guard !assignments.isEmpty else { return }
+
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status.vesperCanMutateSelectedAssets else {
+            if status == .notDetermined {
+                PHPhotoLibrary.requestAuthorization(for: .readWrite) { new in
+                    DispatchQueue.main.async {
+                        if new.vesperCanMutateSelectedAssets { syncRatedPhotosToAlbums() }
+                        else { showPhotoLibraryAccessAlert = true }
+                    }
+                }
+            } else {
+                showPhotoLibraryAccessAlert = true
+            }
+            return
+        }
+
+        performRatingAlbumSync(assignments: assignments)
+    }
+
+    private func performRatingAlbumSync(assignments: [(assetId: String, rating: Int)]) {
+        isSyncingRatingAlbums = true
+        let albums = existingRatingAlbums()
+        let normalized = assignments.map { (assetId: $0.assetId, rating: min(max($0.rating, 1), 5)) }
+
+        PHPhotoLibrary.shared().performChanges {
+            for (albumRating, album) in albums {
+                let idsToRemove = normalized
+                    .filter { $0.rating != albumRating }
+                    .map(\.assetId)
+                guard !idsToRemove.isEmpty else { continue }
+                let assets = PHAsset.fetchAssets(withLocalIdentifiers: idsToRemove, options: nil)
+                PHAssetCollectionChangeRequest(for: album)?.removeAssets(assets)
+            }
+
+            for rating in 1...5 {
+                let ids = normalized
+                    .filter { $0.rating == rating }
+                    .map(\.assetId)
+                guard !ids.isEmpty else { continue }
+
+                if let album = albums[rating] {
+                    let idsToAdd = ids.filter { !ratingAlbum(album, containsAssetID: $0) }
+                    guard !idsToAdd.isEmpty else { continue }
+                    let assets = PHAsset.fetchAssets(withLocalIdentifiers: idsToAdd, options: nil)
+                    PHAssetCollectionChangeRequest(for: album)?.addAssets(assets)
+                } else {
+                    let assets = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
+                    let request = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: ratingAlbumTitle(rating))
+                    request.addAssets(assets)
+                }
+            }
+        } completionHandler: { success, error in
+            DispatchQueue.main.async {
+                isSyncingRatingAlbums = false
+                if success {
+                    albumToastText = "Synced star albums"
+                    withAnimation(.spring(response: 0.4)) { showAlbumSavedToast = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                        withAnimation { showAlbumSavedToast = false }
+                    }
+                } else if let error {
+                    resultsLogger.error("Rating album sync failed: \(error.localizedDescription, privacy: .private)")
+                }
+            }
+        }
+    }
+
+    private func existingRatingAlbums() -> [Int: PHAssetCollection] {
+        var albums: [Int: PHAssetCollection] = [:]
+        for rating in 1...5 {
+            if let album = fetchAlbum(named: ratingAlbumTitle(rating)) {
+                albums[rating] = album
+            }
+        }
+        return albums
+    }
+
+    private func fetchAlbum(named title: String) -> PHAssetCollection? {
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "title = %@", title)
+        return PHAssetCollection
+            .fetchAssetCollections(with: .album, subtype: .albumRegular, options: options)
+            .firstObject
+    }
+
+    private func ratingAlbum(_ album: PHAssetCollection, containsAssetID assetId: String) -> Bool {
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "localIdentifier = %@", assetId)
+        return PHAsset.fetchAssets(in: album, options: options).firstObject != nil
+    }
+
+    private func ratingAlbumTitle(_ rating: Int) -> String {
+        "Vesper - \(rating) Star\(rating == 1 ? "" : "s")"
     }
 
     private func deleteAllDeleteCandidates() {
@@ -1847,6 +1982,43 @@ struct GalleryView: View {
             }
 
             if rating > 0 {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("Optional details")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.34))
+                        .padding(.horizontal, 2)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 7) {
+                            ForEach(quickReasons(for: rating), id: \.self) { reason in
+                                let isSelected = selectedQuickReasons(from: savedReason, allowed: quickReasons(for: rating)).contains(reason)
+                                Button {
+                                    toggleQuickReason(reason, result: result)
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        if isSelected {
+                                            Image(systemName: "checkmark")
+                                                .font(.system(size: 9, weight: .bold))
+                                        }
+                                        Text(reason)
+                                            .font(.caption2.weight(.semibold))
+                                    }
+                                    .foregroundStyle(isSelected ? .black : .white.opacity(0.62))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(isSelected ? ratingTint(rating) : Color.white.opacity(0.05))
+                                    .clipShape(Capsule())
+                                    .overlay(Capsule().stroke(isSelected ? ratingTint(rating).opacity(0.35) : Color.white.opacity(0.08), lineWidth: 1))
+                                }
+                                .disabled(isSaving)
+                                .accessibilityLabel(reason)
+                                .accessibilityHint(isSelected ? "Remove this detail from the rating" : "Add this detail to the rating")
+                            }
+                        }
+                        .padding(.horizontal, 2)
+                    }
+                }
+
                 Button {
                     reasonPhotoID = result.id
                 } label: {
@@ -1895,11 +2067,62 @@ struct GalleryView: View {
     private func ratingLabel(_ rating: Int) -> String {
         switch rating {
         case 5: return "Highly preferred"
-        case 4: return "Decent pick"
-        case 3: return "Average"
-        case 2: return "Weak photo"
-        default: return "Not ideal"
+        case 4: return "Strong pick"
+        case 3: return "Backup option"
+        case 2: return "Weak backup"
+        default: return "Not a fit"
         }
+    }
+
+    private func quickReasons(for rating: Int) -> [String] {
+        switch rating {
+        case 5:
+            return ["Great expression", "Good angle", "Good lighting", "Matches my style"]
+        case 4:
+            return ["Good expression", "Good angle", "Clean photo", "Matches my style"]
+        case 3:
+            return ["Usable", "Backup", "Mixed expression", "Not the best angle"]
+        case 2:
+            return ["Awkward expression", "Bad angle", "Poor lighting", "Background"]
+        default:
+            return ["Blurry", "Eyes", "Bad angle", "Not my style"]
+        }
+    }
+
+    private func selectedQuickReasons(from reason: String, allowed: [String]) -> Set<String> {
+        let parts = reason
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return Set(parts.filter { allowed.contains($0) })
+    }
+
+    private func customReasonText(from reason: String, excluding quickReasons: [String]) -> String {
+        reason
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !quickReasons.contains($0) }
+            .joined(separator: ", ")
+    }
+
+    private func toggleQuickReason(_ reason: String, result: PhotoResult) {
+        guard let rating = feedbackSaved[result.id]?.starRating,
+              !savingFeedbackIDs.contains(result.id) else { return }
+
+        let suggestions = quickReasons(for: rating)
+        let currentReason = feedbackReasons[result.id] ?? ""
+        var selected = selectedQuickReasons(from: currentReason, allowed: suggestions)
+        if selected.contains(reason) {
+            selected.remove(reason)
+        } else {
+            selected.insert(reason)
+        }
+
+        let combined = FeedbackReasonBuilder.combinedReason(
+            suggestions: suggestions,
+            selectedReasons: selected,
+            customText: customReasonText(from: currentReason, excluding: suggestions)
+        )
+        saveStarRating(rating, reason: combined, result: result, showToast: true, allowUploadPrompt: false)
     }
 
     private func showLearningMessage(_ text: String) {

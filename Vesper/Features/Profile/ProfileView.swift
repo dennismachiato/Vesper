@@ -358,10 +358,10 @@ struct ProfileView: View {
                         .frame(maxWidth: .infinity)
                         .padding(32)
                     } else {
-                        HStack(spacing: 12) {
-                            feedbackStat(icon: "star.fill", value: highRatedCount, label: "4-5", color: .green)
-                            feedbackStat(icon: "star.leadinghalf.filled", value: neutralCount, label: "3", color: .orange)
-                            feedbackStat(icon: "star.slash.fill", value: lowRatedCount, label: "1-2", color: .red)
+                        HStack(spacing: 10) {
+                            feedbackStat(icon: "star.fill", value: highRatedCount, label: "4-5 stars", color: .green)
+                            feedbackStat(icon: "star.leadinghalf.filled", value: neutralCount, label: "3 stars", color: .orange)
+                            feedbackStat(icon: "star.slash.fill", value: lowRatedCount, label: "1-2 stars", color: .red)
                         }
 
                         learningSignalCard
@@ -546,16 +546,14 @@ struct ProfileView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.45))
                 .lineLimit(1)
-                .minimumScaleFactor(0.8)
-            Text("Stars")
-                .font(.caption2)
-                .foregroundStyle(.white.opacity(0.32))
-                .lineLimit(1)
+                .minimumScaleFactor(0.65)
         }
-        .padding(16)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 14)
         .background(color.opacity(0.09))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(color.opacity(0.15), lineWidth: 1))
+        .frame(minHeight: 116)
         .frame(maxWidth: .infinity)
     }
 
