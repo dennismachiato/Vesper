@@ -51,6 +51,7 @@ struct ResultsView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var showDeleteAllConfirm = false
     @State private var showPhotoLibraryAccessAlert = false
+    @State private var showPhotoIdentifierUnavailableAlert = false
     @State private var isMultiSelectingDeletes = false
     @State private var selectedDeleteIndices: Set<Int> = []
     @State private var showMultiDeleteConfirm = false
@@ -408,7 +409,7 @@ struct ResultsView: View {
                                 Button("Delete from Library", role: .destructive) { deleteAllDeleteCandidates() }
                                 Button("Cancel", role: .cancel) {}
                             } message: {
-                                Text("This permanently deletes these photos. It cannot be undone.")
+                                Text("This moves these photos to Recently Deleted in Photos. You can recover them for 30 days.")
                             }
                             .confirmationDialog(
                                 "Delete \(selectedDeleteIndices.count) selected photo\(selectedDeleteIndices.count == 1 ? "" : "s") from your iPhone?",
@@ -418,7 +419,7 @@ struct ResultsView: View {
                                 Button("Delete from Library", role: .destructive) { deleteSelectedDeleteCandidates() }
                                 Button("Cancel", role: .cancel) {}
                             } message: {
-                                Text("This permanently deletes these photos. It cannot be undone.")
+                                Text("This moves these photos to Recently Deleted in Photos. You can recover them for 30 days.")
                             }
 
                             if showDeleteCandidates {
@@ -566,7 +567,7 @@ struct ResultsView: View {
                                 Button("Delete from Library", role: .destructive) { deleteSelectedSimilars() }
                                 Button("Cancel", role: .cancel) {}
                             } message: {
-                                Text("This permanently deletes these photos. It cannot be undone.")
+                                Text("This moves these photos to Recently Deleted in Photos. You can recover them for 30 days.")
                             }
 
                             if showSimilars {
@@ -704,6 +705,11 @@ struct ResultsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("To save albums or delete photos, allow Vesper access to the selected photos or full access in Settings.")
+        }
+        .alert("Photo Unavailable", isPresented: $showPhotoIdentifierUnavailableAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Some photos are missing their Photos library identifier, so Vesper cannot delete them from your iPhone.")
         }
         .fullScreenCover(isPresented: Binding(
             get: { galleryStartIndex != nil },
@@ -1178,28 +1184,40 @@ struct ResultsView: View {
             return
         }
 
-        let assetIds = deleteCandidates.compactMap { $0.assetIdentifier.isEmpty ? nil : $0.assetIdentifier }
-        if assetIds.isEmpty { deleteCandidates = []; return }
+        let deletableResults = deleteCandidates.filter { !$0.assetIdentifier.isEmpty }
+        let assetIds = deletableResults.map(\.assetIdentifier)
+        guard !assetIds.isEmpty else {
+            showPhotoIdentifierUnavailableAlert = true
+            return
+        }
+        let deletedIDs = Set(deletableResults.map(\.id))
 
         let assets = PHAsset.fetchAssets(withLocalIdentifiers: assetIds, options: nil)
         PHPhotoLibrary.shared().performChanges({
             PHAssetChangeRequest.deleteAssets(assets)
         }) { success, _ in
-            DispatchQueue.main.async { if success { deleteCandidates = [] } }
+            DispatchQueue.main.async {
+                if success {
+                    recordDeletionFeedback(for: deletableResults)
+                    deleteCandidates.removeAll { deletedIDs.contains($0.id) }
+                    selectedDeleteIndices = []
+                    isMultiSelectingDeletes = false
+                }
+            }
         }
     }
 
     private func deleteSelectedDeleteCandidates() {
-        let indices = selectedDeleteIndices.sorted().reversed()
-        let assetIds = indices.compactMap { deleteCandidates[$0].assetIdentifier.isEmpty ? nil : deleteCandidates[$0].assetIdentifier }
-        let localIndices = Array(indices)
-
-        if assetIds.isEmpty {
-            for i in localIndices { deleteCandidates.remove(at: i) }
-            selectedDeleteIndices = []
-            isMultiSelectingDeletes = false
+        let selectedResults = selectedDeleteIndices
+            .filter { deleteCandidates.indices.contains($0) }
+            .map { deleteCandidates[$0] }
+        let deletableResults = selectedResults.filter { !$0.assetIdentifier.isEmpty }
+        let assetIds = deletableResults.map(\.assetIdentifier)
+        guard !assetIds.isEmpty else {
+            showPhotoIdentifierUnavailableAlert = true
             return
         }
+        let deletedIDs = Set(deletableResults.map(\.id))
 
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status.vesperCanMutateSelectedAssets else { showPhotoLibraryAccessAlert = true; return }
@@ -1210,7 +1228,8 @@ struct ResultsView: View {
         }) { success, _ in
             DispatchQueue.main.async {
                 if success {
-                    for i in localIndices { deleteCandidates.remove(at: i) }
+                    recordDeletionFeedback(for: deletableResults)
+                    deleteCandidates.removeAll { deletedIDs.contains($0.id) }
                     selectedDeleteIndices = []
                     isMultiSelectingDeletes = false
                 }
@@ -1219,16 +1238,16 @@ struct ResultsView: View {
     }
 
     private func deleteSelectedSimilars() {
-        let indices = selectedSimilarIndices.sorted().reversed()
-        let assetIds = indices.compactMap { similars[$0].assetIdentifier.isEmpty ? nil : similars[$0].assetIdentifier }
-        let localIndices = Array(indices)
-
-        if assetIds.isEmpty {
-            for i in localIndices { similars.remove(at: i) }
-            selectedSimilarIndices = []
-            isMultiSelectingSimilars = false
+        let selectedResults = selectedSimilarIndices
+            .filter { similars.indices.contains($0) }
+            .map { similars[$0] }
+        let deletableResults = selectedResults.filter { !$0.assetIdentifier.isEmpty }
+        let assetIds = deletableResults.map(\.assetIdentifier)
+        guard !assetIds.isEmpty else {
+            showPhotoIdentifierUnavailableAlert = true
             return
         }
+        let deletedIDs = Set(deletableResults.map(\.id))
 
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status.vesperCanMutateSelectedAssets else { showPhotoLibraryAccessAlert = true; return }
@@ -1239,7 +1258,8 @@ struct ResultsView: View {
         }) { success, _ in
             DispatchQueue.main.async {
                 if success {
-                    for i in localIndices { similars.remove(at: i) }
+                    recordDeletionFeedback(for: deletableResults)
+                    similars.removeAll { deletedIDs.contains($0.id) }
                     selectedSimilarIndices = []
                     isMultiSelectingSimilars = false
                 }
@@ -1290,6 +1310,41 @@ struct ResultsView: View {
         showPromotedToast = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
             withAnimation(.easeOut(duration: 0.4)) { showPromotedToast = false }
+        }
+    }
+
+    private func recordDeletionFeedback(for results: [PhotoResult]) {
+        guard !results.isEmpty else { return }
+        Task {
+            for result in results {
+                let imageEmb = await CLIPEmbedder.shared?.embedAsync(image: result.image) ?? []
+                let feedback = PhotoFeedback(
+                    liked: false,
+                    isNeutral: false,
+                    reason: "Deleted from library",
+                    imageEmbedding: imageEmb,
+                    reasonEmbedding: [],
+                    purposeTag: purposeTag,
+                    qualityScore: result.qualityScore,
+                    exposureScore: result.exposureScore,
+                    compositionScore: result.compositionScore,
+                    genuineSmileScore: result.genuineSmileScore,
+                    contrastEmbedding: [],
+                    faceYaw: result.faceYaw,
+                    eyeOpenConfidence: result.eyeOpenConfidence,
+                    colorHarmonyScore: result.colorHarmonyScore,
+                    referenceScore: result.referenceScore ?? 0.5,
+                    userFaceIdentified: result.userFaceIdentified,
+                    starRating: 1
+                )
+                modelContext.insert(feedback)
+            }
+            do {
+                try modelContext.save()
+            } catch {
+                modelContext.rollback()
+                resultsLogger.error("Save deletion feedback failed: \(error.localizedDescription, privacy: .private)")
+            }
         }
     }
 
@@ -1354,6 +1409,7 @@ struct GalleryView: View {
     @State private var showShareSheet = false
     @State private var favoritedAssetIds: Set<String> = []
     @State private var showPhotoAccessAlert = false
+    @State private var showPhotoIdentifierUnavailableAlert = false
     @State private var showLearningToast = false
     @State private var learningToastText = "Vesper is learning your taste"
     @State private var showFavoritedToast = false
@@ -1606,7 +1662,7 @@ struct GalleryView: View {
                             }
                             Button("Cancel", role: .cancel) {}
                         } message: {
-                            Text("This permanently deletes the photo from your iPhone. It cannot be undone.")
+                            Text("This moves the photo to Recently Deleted in Photos. You can recover it for 30 days.")
                         }
                     }
                     .padding(.horizontal, 20)
@@ -1705,6 +1761,11 @@ struct GalleryView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("To organize, favorite, or delete photos, allow Vesper access to the selected photos or full access in Settings.")
+        }
+        .alert("Photo Unavailable", isPresented: $showPhotoIdentifierUnavailableAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This photo is missing its Photos library identifier, so Vesper cannot delete it from your iPhone.")
         }
         .sheet(isPresented: $showPhotoSharePrompt) {
             PhotoShareConsentSheet { optIn in
@@ -2103,10 +2164,8 @@ struct GalleryView: View {
         guard index < photos.count else { return }
         let result = photos[index]
         let assetId = result.assetIdentifier
-        saveStarRating(1, reason: "Deleted from library", result: result, showToast: false, allowUploadPrompt: false)
         guard !assetId.isEmpty else {
-            // No identifier available — fall back to remove from results only
-            removeFromResults(at: index)
+            showPhotoIdentifierUnavailableAlert = true
             return
         }
 
@@ -2134,6 +2193,7 @@ struct GalleryView: View {
         } completionHandler: { success, _ in
             DispatchQueue.main.async {
                 if success {
+                    saveStarRating(1, reason: "Deleted from library", result: result, showToast: false, allowUploadPrompt: false)
                     removeFromResults(at: index)
                 }
             }
@@ -2380,7 +2440,7 @@ struct PhotoShareConsentSheet: View {
                     Text("Help improve Vesper?")
                         .font(.title3.bold())
                         .foregroundStyle(.white)
-                    Text("Share anonymous rating details and a small, low-resolution copy of rated photos to help improve Vesper. Your local scoring still runs on-device.")
+                    Text("Share optional product feedback: ratings, notes, prompts, scores, and a small low-resolution thumbnail. Your local scoring still runs on-device.")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.55))
                         .multilineTextAlignment(.center)
@@ -2391,7 +2451,7 @@ struct PhotoShareConsentSheet: View {
                     Image(systemName: "lock.shield.fill")
                         .font(.caption)
                         .foregroundStyle(Color.vesperAccent.opacity(0.6))
-                    Text("Optional · Anonymous · Never sold")
+                    Text("Optional · Private by default · Never sold")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.4))
                 }

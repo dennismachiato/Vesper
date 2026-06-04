@@ -28,7 +28,7 @@ The app is built around a simple product idea: photo selection is personal. A te
 - Reference-photo profile that can learn a user's visual taste and help identify the recurring user face in future batches
 - Batch ranking for dating photos, social posts, professional shots, outfit checks, and camera roll cleanup
 - Full library cleanup flow with review-first delete suggestions
-- Firebase App Check and locked-down Firestore rules for optional anonymous feedback collection
+- Firebase App Check and locked-down Firestore rules for optional product feedback collection
 
 ## Product Flow
 
@@ -61,7 +61,7 @@ Vesper is designed around local-first photo analysis:
 - Reference photos are stored locally with SwiftData.
 - Feedback learning runs from local history.
 - Full-resolution photos are not uploaded for scoring.
-- Optional anonymous feedback can be sent to Firebase only after the user opts in.
+- Optional product feedback can be sent to Firebase only after the user opts in.
 - Optional shared thumbnails are resized and capped before upload.
 - Firestore rules deny reads, deny updates/deletes, require App Check, validate field types, and cap payload sizes.
 

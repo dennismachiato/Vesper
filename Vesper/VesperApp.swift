@@ -38,16 +38,10 @@ struct VesperApp: App {
         do {
             return try VesperApp.makeModelContainer()
         } catch {
-            // Migration failed — attempt to delete the old store file and retry.
-            // This should only happen in extreme edge cases (corrupted store).
-            appLogger.error("ModelContainer migration failed; attempting recovery: \(error.localizedDescription, privacy: .private)")
-            VesperApp.deleteStoreFiles()
-            if let fresh = try? VesperApp.makeModelContainer() {
-                return fresh
-            }
-            // Last resort: in-memory container so the app launches rather than crashes.
-            // User sees an empty library but can still use the app and re-add data.
-            appLogger.error("Falling back to in-memory store; previous data is inaccessible.")
+            // Do not delete the persistent store automatically. A migration bug
+            // should not become silent data loss; keep the files in place and
+            // launch with an in-memory store until a recovery path can be shown.
+            appLogger.error("ModelContainer initialization failed; preserving persistent store and falling back: \(error.localizedDescription, privacy: .private)")
             if let memory = try? VesperApp.makeModelContainer(isStoredInMemoryOnly: true) {
                 return memory
             }
@@ -62,13 +56,19 @@ struct VesperApp: App {
         return try ModelContainer(for: schema, configurations: config)
     }
 
-    private static func deleteStoreFiles() {
+    private static func quarantineStoreFiles() {
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory,
                                                         in: .userDomainMask).first else { return }
         let fileManager = FileManager.default
+        let quarantineDirectory = appSupport.appendingPathComponent("StoreRecovery-\(Int(Date().timeIntervalSince1970))")
+        try? fileManager.createDirectory(at: quarantineDirectory, withIntermediateDirectories: true)
         let fallbackNames = ["default.store", "default.store-shm", "default.store-wal"]
         for name in fallbackNames {
-            try? fileManager.removeItem(at: appSupport.appendingPathComponent(name))
+            let source = appSupport.appendingPathComponent(name)
+            let destination = quarantineDirectory.appendingPathComponent(name)
+            if fileManager.fileExists(atPath: source.path) {
+                try? fileManager.moveItem(at: source, to: destination)
+            }
         }
 
         guard let urls = try? fileManager.contentsOfDirectory(
@@ -78,7 +78,7 @@ struct VesperApp: App {
         ) else { return }
 
         for url in urls where url.lastPathComponent.hasPrefix("default.store") {
-            try? fileManager.removeItem(at: url)
+            try? fileManager.moveItem(at: url, to: quarantineDirectory.appendingPathComponent(url.lastPathComponent))
         }
     }
 
@@ -110,6 +110,7 @@ struct VesperApp: App {
         if !isUITesting {
             VesperApp.resetOnboardingIfRestoredEmpty(container: modelContainer)
         }
+        VesperApp.protectStoreFiles()
 
         // Run data maintenance once on launch, off the main actor.
         Task.detached(priority: .background) { [modelContainer] in
@@ -150,6 +151,22 @@ struct VesperApp: App {
         return true
     }
 
+    private static func protectStoreFiles() {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory,
+                                                        in: .userDomainMask).first else { return }
+        let fileManager = FileManager.default
+        let names = ["default.store", "default.store-shm", "default.store-wal"]
+        for name in names {
+            let url = appSupport.appendingPathComponent(name)
+            guard fileManager.fileExists(atPath: url.path) else { continue }
+            do {
+                try fileManager.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)
+            } catch {
+                appLogger.error("Failed to set store file protection: \(error.localizedDescription, privacy: .private)")
+            }
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             if !splashDone {
@@ -180,6 +197,6 @@ struct VesperApp: App {
 
 class VesperAppCheckProviderFactory: NSObject, AppCheckProviderFactory {
     func createProvider(with app: FirebaseApp) -> (any AppCheckProvider)? {
-        AppAttestProvider(app: app)
+        AppAttestProvider(app: app) ?? DeviceCheckProvider(app: app)
     }
 }

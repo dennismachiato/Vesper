@@ -16,7 +16,7 @@ class FeedbackUploadService {
     private let maxUploadsPerMinute = 10
     private init() {}
 
-    /// Upload anonymous feedback. photoThumbnailData only included if user opted in.
+    /// Upload optional product feedback. photoThumbnailData is included only if the user opted in.
     func upload(
         liked: Bool,
         starRating: Int? = nil,

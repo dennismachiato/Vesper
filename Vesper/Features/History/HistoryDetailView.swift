@@ -90,25 +90,29 @@ struct HistoryDetailView: View {
         return mag > 0 ? avg.map { $0 / mag } : avg
     }
 
-    private var likedEmbeddings: [(embedding: [Float], date: Date)] {
+    private var likedEmbeddings: [WeightedEmbedding] {
         purposeFilteredFeedback.filter(\.isPositiveSignal)
-            .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt) }
+            .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt, abs(f.preferenceSignal)) }
     }
-    private var neutralEmbeddings: [(embedding: [Float], date: Date)] {
+    private var neutralEmbeddings: [WeightedEmbedding] {
         purposeFilteredFeedback.filter(\.isNeutralSignal)
-            .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt) }
+            .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt, 0.35) }
     }
-    private var lowRatedEmbeddings: [(embedding: [Float], date: Date)] {
+    private var lowRatedEmbeddings: [WeightedEmbedding] {
         purposeFilteredFeedback.filter(\.isNegativeSignal)
-            .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt) }
+            .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt, abs(f.preferenceSignal)) }
     }
-    private var lowRatingReasonEmbeddings: [(embedding: [Float], date: Date)] {
+    private var lowRatingReasonEmbeddings: [WeightedEmbedding] {
         purposeFilteredFeedback.filter(\.isNegativeSignal)
-            .compactMap { f in f.reasonEmbedding.isEmpty ? nil : (f.reasonEmbedding, f.createdAt) }
+            .compactMap { f in f.reasonEmbedding.isEmpty ? nil : (f.reasonEmbedding, f.createdAt, abs(f.preferenceSignal)) }
     }
-    private var contrastEmbeddings: [(embedding: [Float], date: Date)] {
+    private var likedReasonEmbeddings: [WeightedEmbedding] {
         purposeFilteredFeedback.filter(\.isPositiveSignal)
-            .compactMap { f in f.contrastEmbedding.isEmpty ? nil : (f.contrastEmbedding, f.createdAt) }
+            .compactMap { f in f.reasonEmbedding.isEmpty ? nil : (f.reasonEmbedding, f.createdAt, abs(f.preferenceSignal)) }
+    }
+    private var contrastEmbeddings: [WeightedEmbedding] {
+        purposeFilteredFeedback.filter(\.isPositiveSignal)
+            .compactMap { f in f.contrastEmbedding.isEmpty ? nil : (f.contrastEmbedding, f.createdAt, abs(f.preferenceSignal)) }
     }
     private var lowRatingReasons: [String] {
         purposeFilteredFeedback.filter { $0.isNegativeSignal && !$0.reason.isEmpty }
@@ -283,8 +287,12 @@ struct HistoryDetailView: View {
                 .confirmationDialog("Delete this batch from history?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
                     Button("Delete", role: .destructive) {
                         modelContext.delete(batch)
-                        try? modelContext.save()
-                        dismiss()
+                        do {
+                            try modelContext.save()
+                            dismiss()
+                        } catch {
+                            modelContext.rollback()
+                        }
                     }
                     Button("Cancel", role: .cancel) {}
                 }
@@ -347,6 +355,7 @@ struct HistoryDetailView: View {
                     likedEmbeddings: likedEmbeddings,
                     neutralEmbeddings: neutralEmbeddings,
                     lowRatedEmbeddings: lowRatedEmbeddings,
+                    likedReasonEmbeddings: likedReasonEmbeddings,
                     lowRatingReasonEmbeddings: lowRatingReasonEmbeddings,
                     contrastEmbeddings: contrastEmbeddings,
                     feedbackHistory: Array(purposeFilteredFeedback),

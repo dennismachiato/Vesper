@@ -8,6 +8,7 @@
 import SwiftUI
 import PhotosUI
 import Combine
+import ImageIO
 
 private enum ProcessingPhase: Equatable {
     case loading    // downloading from iCloud / camera roll
@@ -53,11 +54,12 @@ struct ProcessingView: View {
     var isReferenceDriven: Bool = false
     let datingVibe: String
     let datingAudience: String
-    let likedEmbeddings: [(embedding: [Float], date: Date)]
-    let neutralEmbeddings: [(embedding: [Float], date: Date)]
-    let lowRatedEmbeddings: [(embedding: [Float], date: Date)]
-    let lowRatingReasonEmbeddings: [(embedding: [Float], date: Date)]
-    let contrastEmbeddings: [(embedding: [Float], date: Date)]
+    let likedEmbeddings: [WeightedEmbedding]
+    let neutralEmbeddings: [WeightedEmbedding]
+    let lowRatedEmbeddings: [WeightedEmbedding]
+    let likedReasonEmbeddings: [WeightedEmbedding]
+    let lowRatingReasonEmbeddings: [WeightedEmbedding]
+    let contrastEmbeddings: [WeightedEmbedding]
     let feedbackHistory: [PhotoFeedback]
     let lowRatingReasons: [String]
     let purposeTag: String
@@ -346,7 +348,7 @@ struct ProcessingView: View {
             await MainActor.run {
                 phase = .analyzing
                 for (i, img) in preloaded.enumerated() {
-                    buffer.append(img, at: i)
+                    buffer.append(Self.downsampleImage(img, maxPixelSize: Self.processingImageMaxPixel), at: i)
                 }
             }
         } else {
@@ -364,7 +366,7 @@ struct ProcessingView: View {
                     let item = items[idx]
                     group.addTask {
                         let data = try? await item.loadTransferable(type: Data.self)
-                        return (idx, data.flatMap { UIImage(data: $0) })
+                        return (idx, data.flatMap { Self.downsampleImage(data: $0, maxPixelSize: Self.processingImageMaxPixel) })
                     }
                     nextDownload += 1
                 }
@@ -382,7 +384,7 @@ struct ProcessingView: View {
                         let item = items[idx]
                         group.addTask {
                             let data = try? await item.loadTransferable(type: Data.self)
-                            return (idx, data.flatMap { UIImage(data: $0) })
+                            return (idx, data.flatMap { Self.downsampleImage(data: $0, maxPixelSize: Self.processingImageMaxPixel) })
                         }
                         nextDownload += 1
                     }
@@ -412,52 +414,75 @@ struct ProcessingView: View {
         analysisCompleted = 0
 
         let processor = BatchProcessor()
-        let result = await Task { () -> (topPicks: [PhotoResult], runnerUps: [PhotoResult], deleteCandidates: [PhotoResult], similars: [PhotoResult]) in
-            return await processor.processImages(
-                images: sortedImages,
-                assetIdentifiers: sortedIdentifiers,
-                pickCount: pickCount,
-                category: category,
-                aesthetics: aesthetics,
-                tasteProfile: tasteProfile,
-                referenceEmbeddings: referenceEmbeddings,
-                avgEmbedding: avgEmbedding,
-                promptEmbedding: promptEmbedding,
-                promptText: promptText,
-                isPromptMode: isPromptMode,
-                isDatingMode: isDatingMode,
-                isReferenceDriven: isReferenceDriven,
-                purposeTag: purposeTag,
-                datingVibe: datingVibe,
-                datingAudience: datingAudience,
-                likedEmbeddings: likedEmbeddings,
-                neutralEmbeddings: neutralEmbeddings,
-                lowRatedEmbeddings: lowRatedEmbeddings,
-                lowRatingReasonEmbeddings: lowRatingReasonEmbeddings,
-                contrastEmbeddings: contrastEmbeddings,
-                feedbackHistory: feedbackHistory,
-                lowRatingReasons: lowRatingReasons,
-                userFaceEmbeddings: userFaceEmbeddings,
-                requireUniquePicks: requireUniquePicks,
-                onProgress: { completed, total in
-                    analysisCompleted = completed
-                    analysisTotal = total
-                }
-            )
-        }.result
+        let result = await processor.processImages(
+            images: sortedImages,
+            assetIdentifiers: sortedIdentifiers,
+            pickCount: pickCount,
+            category: category,
+            aesthetics: aesthetics,
+            tasteProfile: tasteProfile,
+            referenceEmbeddings: referenceEmbeddings,
+            avgEmbedding: avgEmbedding,
+            promptEmbedding: promptEmbedding,
+            promptText: promptText,
+            isPromptMode: isPromptMode,
+            isDatingMode: isDatingMode,
+            isReferenceDriven: isReferenceDriven,
+            purposeTag: purposeTag,
+            datingVibe: datingVibe,
+            datingAudience: datingAudience,
+            likedEmbeddings: likedEmbeddings,
+            neutralEmbeddings: neutralEmbeddings,
+            lowRatedEmbeddings: lowRatedEmbeddings,
+            likedReasonEmbeddings: likedReasonEmbeddings,
+            lowRatingReasonEmbeddings: lowRatingReasonEmbeddings,
+            contrastEmbeddings: contrastEmbeddings,
+            feedbackHistory: feedbackHistory,
+            lowRatingReasons: lowRatingReasons,
+            userFaceEmbeddings: userFaceEmbeddings,
+            requireUniquePicks: requireUniquePicks,
+            onProgress: { completed, total in
+                analysisCompleted = completed
+                analysisTotal = total
+            }
+        )
 
         guard !Task.isCancelled else { return }
 
-        switch result {
-        case .success(let (topPicks, runnerUps, deleteCandidates, similars)):
-            // Surface an error if scoring produced nothing at all
-            if topPicks.isEmpty && runnerUps.isEmpty && deleteCandidates.isEmpty {
-                currentError = .processingFailed
-            } else {
-                onComplete(topPicks, runnerUps, deleteCandidates, similars)
-            }
-        case .failure:
+        let (topPicks, runnerUps, deleteCandidates, similars) = result
+        if topPicks.isEmpty && runnerUps.isEmpty && deleteCandidates.isEmpty {
             currentError = .processingFailed
+        } else {
+            onComplete(topPicks, runnerUps, deleteCandidates, similars)
+        }
+    }
+
+    private static let processingImageMaxPixel: CGFloat = 1_600
+
+    private static func downsampleImage(data: Data, maxPixelSize: CGFloat) -> UIImage? {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, options) else {
+            return UIImage(data: data)
+        }
+        let downsampleOptions = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(maxPixelSize)
+        ] as CFDictionary
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, downsampleOptions) else {
+            return UIImage(data: data)
+        }
+        return UIImage(cgImage: cgImage)
+    }
+
+    private static func downsampleImage(_ image: UIImage, maxPixelSize: CGFloat) -> UIImage {
+        let maxDimension = max(image.size.width, image.size.height)
+        guard maxDimension > maxPixelSize else { return image }
+        let scale = maxPixelSize / maxDimension
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
         }
     }
 }
@@ -478,11 +503,12 @@ struct ProcessingView: View {
         isDatingMode: false,
         datingVibe: "",
         datingAudience: "",
-        likedEmbeddings: [(embedding: [Float], date: Date)](),
-        neutralEmbeddings: [(embedding: [Float], date: Date)](),
-        lowRatedEmbeddings: [(embedding: [Float], date: Date)](),
-        lowRatingReasonEmbeddings: [(embedding: [Float], date: Date)](),
-        contrastEmbeddings: [(embedding: [Float], date: Date)](),
+        likedEmbeddings: [],
+        neutralEmbeddings: [],
+        lowRatedEmbeddings: [],
+        likedReasonEmbeddings: [],
+        lowRatingReasonEmbeddings: [],
+        contrastEmbeddings: [],
         feedbackHistory: [],
         lowRatingReasons: [],
         purposeTag: "",

@@ -6,7 +6,7 @@ Vesper is a local-first iOS photo curation app. The core ranking pipeline runs o
 
 - Full-resolution photos are analyzed locally.
 - Reference photos and feedback history are stored locally with SwiftData.
-- Optional anonymous feedback upload is gated by user opt-in.
+- Optional product feedback upload is gated by user opt-in.
 - Optional uploaded thumbnails are resized, JPEG-compressed, and capped before upload.
 - Firebase config files are not committed to this repository.
 

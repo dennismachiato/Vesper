@@ -105,31 +105,36 @@ struct BatchSetupView: View {
         }
     }
 
-    private var likedEmbeddings: [(embedding: [Float], date: Date)] {
+    private var likedEmbeddings: [WeightedEmbedding] {
         purposeFilteredFeedback.filter(\.isPositiveSignal)
-            .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt) }
+            .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt, abs(f.preferenceSignal)) }
     }
 
-    private var neutralEmbeddings: [(embedding: [Float], date: Date)] {
+    private var neutralEmbeddings: [WeightedEmbedding] {
         purposeFilteredFeedback.filter(\.isNeutralSignal)
-            .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt) }
+            .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt, 0.35) }
     }
 
-    private var lowRatedEmbeddings: [(embedding: [Float], date: Date)] {
+    private var lowRatedEmbeddings: [WeightedEmbedding] {
         purposeFilteredFeedback.filter(\.isNegativeSignal)
-            .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt) }
+            .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt, abs(f.preferenceSignal)) }
     }
 
-    private var lowRatingReasonEmbeddings: [(embedding: [Float], date: Date)] {
+    private var lowRatingReasonEmbeddings: [WeightedEmbedding] {
         purposeFilteredFeedback.filter(\.isNegativeSignal)
-            .compactMap { f in f.reasonEmbedding.isEmpty ? nil : (f.reasonEmbedding, f.createdAt) }
+            .compactMap { f in f.reasonEmbedding.isEmpty ? nil : (f.reasonEmbedding, f.createdAt, abs(f.preferenceSignal)) }
+    }
+
+    private var likedReasonEmbeddings: [WeightedEmbedding] {
+        purposeFilteredFeedback.filter(\.isPositiveSignal)
+            .compactMap { f in f.reasonEmbedding.isEmpty ? nil : (f.reasonEmbedding, f.createdAt, abs(f.preferenceSignal)) }
     }
 
     /// Embeddings of photos seen just before high-rated photos — the implicit "runner-up" that was rejected.
     /// Used as a mild contrastive penalty: photos similar to these get a small score reduction.
-    private var contrastEmbeddings: [(embedding: [Float], date: Date)] {
+    private var contrastEmbeddings: [WeightedEmbedding] {
         purposeFilteredFeedback.filter(\.isPositiveSignal)
-            .compactMap { f in f.contrastEmbedding.isEmpty ? nil : (f.contrastEmbedding, f.createdAt) }
+            .compactMap { f in f.contrastEmbedding.isEmpty ? nil : (f.contrastEmbedding, f.createdAt, abs(f.preferenceSignal)) }
     }
 
     /// Raw low-rating reason strings — passed to BatchProcessor for dimension hint extraction.
@@ -256,6 +261,7 @@ struct BatchSetupView: View {
             likedEmbeddings: likedEmbeddings,
             neutralEmbeddings: neutralEmbeddings,
             lowRatedEmbeddings: lowRatedEmbeddings,
+            likedReasonEmbeddings: likedReasonEmbeddings,
             lowRatingReasonEmbeddings: lowRatingReasonEmbeddings,
             contrastEmbeddings: contrastEmbeddings,
             feedbackHistory: Array(purposeFilteredFeedback),

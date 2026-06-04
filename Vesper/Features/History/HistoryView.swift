@@ -4,6 +4,9 @@
 
 import SwiftUI
 import SwiftData
+import OSLog
+
+private let historyLogger = Logger(subsystem: "Vesper", category: "History")
 
 struct HistoryView: View {
     @Query(sort: \BatchHistory.createdAt, order: .reverse) private var history: [BatchHistory]
@@ -36,6 +39,12 @@ struct HistoryView: View {
         ) { batch in
             Button("Delete", role: .destructive) {
                 modelContext.delete(batch)
+                do {
+                    try modelContext.save()
+                } catch {
+                    modelContext.rollback()
+                    historyLogger.error("Delete history batch failed: \(error.localizedDescription, privacy: .private)")
+                }
                 batchPendingDelete = nil
             }
             Button("Cancel", role: .cancel) { batchPendingDelete = nil }

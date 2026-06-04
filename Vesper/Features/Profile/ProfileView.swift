@@ -48,6 +48,7 @@ struct ProfileView: View {
 
     // Privacy / data controls
     @State private var showDeleteAllConfirm = false
+    @State private var showDeleteAllError = false
     @State private var showExportShare = false
     @State private var exportFileURL: URL?
 
@@ -305,7 +306,12 @@ struct ProfileView: View {
 
                                         Button {
                                             modelContext.delete(photo)
-                                            try? modelContext.save()
+                                            do {
+                                                try modelContext.save()
+                                            } catch {
+                                                modelContext.rollback()
+                                                profileLogger.error("Reference photo delete failed: \(error.localizedDescription, privacy: .private)")
+                                            }
                                         } label: {
                                             Image(systemName: "xmark.circle.fill")
                                                 .font(.system(size: 18))
@@ -314,6 +320,8 @@ struct ProfileView: View {
                                                 .clipShape(Circle())
                                         }
                                         .offset(x: 5, y: -5)
+                                        .accessibilityLabel("Remove reference photo")
+                                        .accessibilityHint("Deletes this style reference from Vesper")
                                     }
                                 }
                             }
@@ -431,7 +439,12 @@ struct ProfileView: View {
                         .confirmationDialog("Clear all feedback? Vesper will start learning from scratch.", isPresented: $showClearFeedbackConfirm, titleVisibility: .visible) {
                             Button("Clear Feedback", role: .destructive) {
                                 for fb in feedbackHistory { modelContext.delete(fb) }
-                                try? modelContext.save()
+                                do {
+                                    try modelContext.save()
+                                } catch {
+                                    modelContext.rollback()
+                                    profileLogger.error("Clear feedback failed: \(error.localizedDescription, privacy: .private)")
+                                }
                             }
                             Button("Cancel", role: .cancel) {}
                         }
@@ -444,7 +457,7 @@ struct ProfileView: View {
                 HStack(spacing: 10) {
                     Image(systemName: "lock.shield.fill")
                         .foregroundStyle(Color.vesperAccent.opacity(0.6))
-                    Text("Photo scoring happens on your iPhone. Optional anonymous feedback sharing helps improve Vesper.")
+                    Text("Photo scoring happens on your iPhone. Optional product feedback can include ratings, notes, prompts, scores, and low-resolution thumbnails.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.4))
                 }
@@ -688,6 +701,11 @@ struct ProfileView: View {
                 ShareSheet(items: [url])
             }
         }
+        .alert("Delete Failed", isPresented: $showDeleteAllError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Vesper could not delete all local data. Please try again.")
+        }
     }
 
     private func privacyRow(icon: String, label: String, tint: Color) -> some View {
@@ -772,15 +790,23 @@ struct ProfileView: View {
         do {
             try modelContext.save()
         } catch {
+            modelContext.rollback()
             profileLogger.error("Delete-all save failed: \(error.localizedDescription, privacy: .private)")
+            showDeleteAllError = true
+            return
         }
 
         // Clear AppStorage flags so the user can re-onboard with a clean slate.
         UserDefaults.standard.removeObject(forKey: "hasCompletedOnboarding")
         UserDefaults.standard.removeObject(forKey: "hasCompletedStyleQuiz")
         UserDefaults.standard.removeObject(forKey: "hasSeenResultsOnce")
-        UserDefaults.standard.removeObject(forKey: "promptHistory")
         UserDefaults.standard.removeObject(forKey: "telemetryOptIn")
+        UserDefaults.standard.removeObject(forKey: "hasAnsweredPhotoShare")
+        UserDefaults.standard.removeObject(forKey: "photoShareOptIn")
+        UserDefaults.standard.removeObject(forKey: "autoCreateRatingAlbums")
+        UserDefaults.standard.removeObject(forKey: "completedBatchCount")
+        UserDefaults.standard.removeObject(forKey: "lastPickCount")
+        PromptHistory.clear()
     }
 
     private func addReferencePhotos(from items: [PhotosPickerItem]) async {

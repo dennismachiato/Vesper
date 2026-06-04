@@ -6,6 +6,8 @@
 import SwiftData
 import UIKit
 
+typealias WeightedEmbedding = (embedding: [Float], date: Date, signal: Float)
+
 @Model
 class PhotoFeedback {
     var liked: Bool

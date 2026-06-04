@@ -233,6 +233,7 @@ class BatchProcessor {
             .map { (feedback: $0.feedback, weight: $0.evidenceWeight * abs($0.signal)) }
         let rawEvidence = highRatedWeighted.map(\.weight).reduce(0, +) + lowRatedWeighted.map(\.weight).reduce(0, +)
         guard rawEvidence >= 0.25 else { return [:] }   // need at least one meaningful recent-ish event
+        guard !highRatedWeighted.isEmpty, !lowRatedWeighted.isEmpty else { return [:] }
 
         // Bayesian shrinkage: with few events, pull the multiplier toward 1.0 (no change).
         // k=5 means 5 "pseudo-counts" worth of evidence are pre-loaded as a neutral prior.
@@ -427,11 +428,12 @@ class BatchProcessor {
         purposeTag: String = "",           // "social", "dating", "professional", "outfit", "cleanup", "general"
         datingVibe: String = "",
         datingAudience: String = "",
-        likedEmbeddings: [(embedding: [Float], date: Date)] = [],
-        neutralEmbeddings: [(embedding: [Float], date: Date)] = [],
-        lowRatedEmbeddings: [(embedding: [Float], date: Date)] = [],
-        lowRatingReasonEmbeddings: [(embedding: [Float], date: Date)] = [],
-        contrastEmbeddings: [(embedding: [Float], date: Date)] = [],   // "runner-up" embeddings — photos seen just before a high-rated photo
+        likedEmbeddings: [WeightedEmbedding] = [],
+        neutralEmbeddings: [WeightedEmbedding] = [],
+        lowRatedEmbeddings: [WeightedEmbedding] = [],
+        likedReasonEmbeddings: [WeightedEmbedding] = [],
+        lowRatingReasonEmbeddings: [WeightedEmbedding] = [],
+        contrastEmbeddings: [WeightedEmbedding] = [],   // "runner-up" embeddings — photos seen just before a high-rated photo
         feedbackHistory: [PhotoFeedback] = [],   // full history — used for weight learning
         lowRatingReasons: [String] = [],           // raw low-rating reason strings — used for dimension hints
         userFaceEmbeddings: [[Float]] = [],      // CLIP embeddings of face crops from reference photos — used to identify the user
@@ -463,10 +465,10 @@ class BatchProcessor {
         let hasReference = !referenceEmbeddings.isEmpty || avgEmbedding != nil
         let needsCLIP    = promptEmbedding != nil || !likedEmbeddings.isEmpty
                            || !lowRatedEmbeddings.isEmpty || !lowRatingReasonEmbeddings.isEmpty
-                           || !contrastEmbeddings.isEmpty || hasReference
+                           || !likedReasonEmbeddings.isEmpty || !contrastEmbeddings.isEmpty || hasReference
         let hasFeedback  = !likedEmbeddings.isEmpty || !neutralEmbeddings.isEmpty
                            || !lowRatedEmbeddings.isEmpty || !lowRatingReasonEmbeddings.isEmpty
-                           || !contrastEmbeddings.isEmpty
+                           || !likedReasonEmbeddings.isEmpty || !contrastEmbeddings.isEmpty
 
         // Recency decay constant: weight = exp(-k * days). k=0.003 → ~half weight at ~231 days.
         // Style preferences change slowly — keeping older feedback relevant longer improves consistency.
@@ -531,6 +533,10 @@ class BatchProcessor {
                     // Vision analysis (face, pose, sharpness, exposure, color harmony, vibe)
                     var s = await self.analyzer.analyzePhoto(img)
                     s.originalIndex = i
+                    guard !Task.isCancelled else {
+                        await semaphore.release()
+                        return (i, PhotoScore(image: img, qualityScore: 0.3))
+                    }
 
                     if !isPromptMode {
                         let catScore = await self.categoryScorer.score(image: s.image, category: category)
@@ -549,6 +555,10 @@ class BatchProcessor {
                         imageEmb = await clipEmbedder.embedAsync(image: s.image)
                     }
                     s.clipEmbedding = imageEmb
+                    guard !Task.isCancelled else {
+                        await semaphore.release()
+                        return (i, PhotoScore(image: img, qualityScore: 0.3))
+                    }
 
                     // User face identification — only runs when the user has reference face
                     // embeddings AND the photo has multiple significant faces to choose between.
@@ -623,10 +633,10 @@ class BatchProcessor {
                     if hasFeedback, let imageEmb {
                         var feedbackScore: Float = 0.5
 
-                        func weightedSim(_ entries: [(embedding: [Float], date: Date)]) -> Float {
+                        func weightedSim(_ entries: [WeightedEmbedding]) -> Float {
                             var weightedSum: Float = 0; var totalWeight: Float = 0
                             for entry in entries {
-                                let w = recencyWeight(entry.date)
+                                let w = recencyWeight(entry.date) * max(0.1, min(entry.signal, 1.0))
                                 weightedSum += CLIPEmbedder.cosineSimilarity(imageEmb, entry.embedding) * w
                                 totalWeight += w
                             }
@@ -639,6 +649,7 @@ class BatchProcessor {
                         // Previously negatives could reach -0.67, making a single low rating hit harder than two likes.
                         // Reduced low-rating reason and contrast weights so the total negative budget ≈ -0.48 max.
                         if !likedEmbeddings.isEmpty  { feedbackScore += weightedSim(likedEmbeddings)  * 0.30 }
+                        if !likedReasonEmbeddings.isEmpty { feedbackScore += weightedSim(likedReasonEmbeddings) * 0.08 }
                         if !neutralEmbeddings.isEmpty {
                             feedbackScore += (0.5 - feedbackScore) * weightedSim(neutralEmbeddings) * 0.15
                         }
@@ -655,6 +666,10 @@ class BatchProcessor {
             var results = [(Int, PhotoScore)]()
             let total = images.count
             for await r in group {
+                if Task.isCancelled {
+                    group.cancelAll()
+                    break
+                }
                 results.append(r)
                 let completed = results.count
                 if !Task.isCancelled, let cb = onProgress {

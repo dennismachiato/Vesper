@@ -11,15 +11,43 @@ service cloud.firestore {
         request.app != null &&
         // Must have required fields
         request.resource.data.keys().hasAll(['liked', 'category', 'qualityScore', 'timestamp']) &&
+        request.resource.data.keys().hasOnly([
+          'liked', 'reason', 'category', 'aesthetic', 'promptText', 'isPromptMode',
+          'qualityScore', 'promptScore', 'referenceScore', 'feedbackScore',
+          'starRating', 'thumbnailBase64', 'timestamp', 'appVersion'
+        ]) &&
         // Validate field types
         request.resource.data.liked is bool &&
         request.resource.data.category is string &&
+        request.resource.data.get('reason', '') is string &&
+        request.resource.data.get('aesthetic', '') is string &&
+        request.resource.data.get('promptText', '') is string &&
+        request.resource.data.get('appVersion', '') is string &&
+        request.resource.data.get('thumbnailBase64', '') is string &&
+        request.resource.data.get('isPromptMode', false) is bool &&
         request.resource.data.qualityScore is number &&
+        (!request.resource.data.keys().hasAny(['promptScore']) ||
+          (request.resource.data.promptScore is number &&
+           request.resource.data.promptScore >= 0 &&
+           request.resource.data.promptScore <= 1)) &&
+        (!request.resource.data.keys().hasAny(['referenceScore']) ||
+          (request.resource.data.referenceScore is number &&
+           request.resource.data.referenceScore >= 0 &&
+           request.resource.data.referenceScore <= 1)) &&
+        (!request.resource.data.keys().hasAny(['feedbackScore']) ||
+          (request.resource.data.feedbackScore is number &&
+           request.resource.data.feedbackScore >= 0 &&
+           request.resource.data.feedbackScore <= 1)) &&
+        (!request.resource.data.keys().hasAny(['starRating']) ||
+          (request.resource.data.starRating is int &&
+           request.resource.data.starRating >= 1 &&
+           request.resource.data.starRating <= 5)) &&
         // Cap string lengths to prevent storage abuse
         request.resource.data.category.size() <= 50 &&
         request.resource.data.get('reason', '').size() <= 500 &&
         request.resource.data.get('promptText', '').size() <= 200 &&
         request.resource.data.get('aesthetic', '').size() <= 100 &&
+        request.resource.data.get('appVersion', '').size() <= 40 &&
         // Score values must be in valid range
         request.resource.data.qualityScore >= 0 &&
         request.resource.data.qualityScore <= 1 &&

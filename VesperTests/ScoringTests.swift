@@ -321,17 +321,11 @@ final class ScoringTests: XCTestCase {
 
     // MARK: - Immediate feedback learning (Bayesian shrinkage)
 
-    func test_learnedWeights_firesWithSingleFeedbackEvent() {
-        // Before: gate was 30 events — returned [:] for fewer. After: fires from event 1.
+    func test_learnedWeights_waitsForPositiveAndNegativeEvidence() {
         let singleDislike = makeFeedback(liked: false, quality: 0.20, exposure: 0.5, comp: 0.5, smile: 0.5)
         let weights = processor.learnedWeightMultipliers(from: [singleDislike])
-        // We disliked a blurry photo (quality 0.20 vs default liked avg 0.50).
-        // Quality delta = 0.50 - 0.20 = 0.30. With shrinkage at n=1: 0.30 * 1/(1+5) = 0.05.
-        // multiplier = 1.0 + 0.05 * 1.5 = 1.075. Exceeds our 0.03 threshold → should appear.
-        XCTAssertFalse(weights.isEmpty,
-            "learnedWeightMultipliers should produce output even with a single disliked photo")
-        XCTAssertNotNil(weights["qualityScore"],
-            "Disliking a low-quality photo should produce a qualityScore weight")
+        XCTAssertTrue(weights.isEmpty,
+            "Preference weights should wait for both high- and low-rated evidence so a single negative-only rating does not oversteer future batches")
     }
 
     func test_learnedWeights_shrinkage_moreDataMeansStrongerSignal() {

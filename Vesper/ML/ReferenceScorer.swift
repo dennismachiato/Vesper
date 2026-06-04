@@ -58,8 +58,8 @@ class ReferenceScorer {
         let candidate = Float(faceCount)
         if avgFaceCount < 1.5 {
             switch faceCount {
-            case 0: return 1.0
-            case 1: return 0.9
+            case 0: return 0.25
+            case 1: return 1.0
             case 2: return 0.4
             default: return 0.1
             }
