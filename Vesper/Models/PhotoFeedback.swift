@@ -38,6 +38,9 @@ class PhotoFeedback {
     /// Whether the user's own face was identified in this photo — gates angle/expression learning.
     var userFaceIdentified: Bool = false
 
+    // V10 additions: 1...5 curation rating. 0 means older like/meh/dislike feedback.
+    var starRating: Int = 0
+
     init(liked: Bool, isNeutral: Bool = false, reason: String = "",
          imageEmbedding: [Float], reasonEmbedding: [Float] = [],
          purposeTag: String = "",
@@ -46,9 +49,10 @@ class PhotoFeedback {
          contrastEmbedding: [Float] = [],
          faceYaw: Float = 0, eyeOpenConfidence: Float = 0.5,
          colorHarmonyScore: Float = 0.5, referenceScore: Float = 0.5,
-         userFaceIdentified: Bool = false) {
-        self.liked = liked
-        self.isNeutral = isNeutral
+         userFaceIdentified: Bool = false, starRating: Int = 0) {
+        let normalizedRating = min(max(starRating, 0), 5)
+        self.liked = normalizedRating > 0 ? normalizedRating >= 4 : liked
+        self.isNeutral = normalizedRating > 0 ? normalizedRating == 3 : isNeutral
         self.reason = reason
         self.embeddingData = imageEmbedding.withUnsafeBytes { Data($0) }
         self.reasonEmbeddingData = reasonEmbedding.withUnsafeBytes { Data($0) }
@@ -64,7 +68,28 @@ class PhotoFeedback {
         self.photoColorHarmonyScore = colorHarmonyScore
         self.photoReferenceScore = referenceScore
         self.userFaceIdentified = userFaceIdentified
+        self.starRating = normalizedRating
     }
+
+    var effectiveStarRating: Int {
+        if (1...5).contains(starRating) { return starRating }
+        if isNeutral { return 3 }
+        return liked ? 5 : 1
+    }
+
+    var preferenceSignal: Float {
+        switch effectiveStarRating {
+        case 5: return 1.0
+        case 4: return 0.55
+        case 3: return 0.0
+        case 2: return -0.55
+        default: return -1.0
+        }
+    }
+
+    var isPositiveSignal: Bool { preferenceSignal > 0 }
+    var isNegativeSignal: Bool { preferenceSignal < 0 }
+    var isNeutralSignal: Bool { preferenceSignal == 0 }
 
     var imageEmbedding: [Float] {
         embeddingData.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }

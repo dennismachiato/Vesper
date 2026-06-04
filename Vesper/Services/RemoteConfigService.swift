@@ -3,6 +3,7 @@
 //  Vesper
 //
 
+import FirebaseCore
 import FirebaseRemoteConfig
 
 @Observable
@@ -16,11 +17,17 @@ class RemoteConfigService {
     var feedbackBoostMax: Float = 1.6
     var feedbackBoostMin: Float = 0.4
 
-    private let config = RemoteConfig.remoteConfig()
+    private let config: RemoteConfig?
 
     private init() {
+        guard FirebaseApp.app() != nil else {
+            config = nil
+            return
+        }
+
+        config = RemoteConfig.remoteConfig()
         // Set defaults so the app works even without network
-        config.setDefaults([
+        config?.setDefaults([
             "quality_weight": NSNumber(value: 0.35),
             "prompt_weight": NSNumber(value: 0.65),
             "reference_weight": NSNumber(value: 0.40),
@@ -30,6 +37,8 @@ class RemoteConfigService {
     }
 
     func fetch() async {
+        guard let config else { return }
+
         do {
             let status = try await config.fetchAndActivate()
             if status == .successFetchedFromRemote || status == .successUsingPreFetchedData {
@@ -41,6 +50,8 @@ class RemoteConfigService {
     }
 
     private func applyValues() {
+        guard let config else { return }
+
         qualityWeight = Self.clamp(config["quality_weight"].numberValue.floatValue, min: 0.0, max: 1.0, fallback: 0.35)
         promptWeight = Self.clamp(config["prompt_weight"].numberValue.floatValue, min: 0.0, max: 1.0, fallback: 0.65)
         referenceWeight = Self.clamp(config["reference_weight"].numberValue.floatValue, min: 0.0, max: 0.60, fallback: 0.40)

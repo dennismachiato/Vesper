@@ -84,9 +84,17 @@ enum VesperSchemaV9: VersionedSchema {
     }
 }
 
+enum VesperSchemaV10: VersionedSchema {
+    // V10 adds starRating to PhotoFeedback so ratings can represent 1...5 strength.
+    static var versionIdentifier = Schema.Version(10, 0, 0)
+    static var models: [any PersistentModel.Type] {
+        [ReferencePhoto.self, PhotoFeedback.self, BatchHistory.self]
+    }
+}
+
 enum VesperMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
-        [VesperSchemaV1.self, VesperSchemaV2.self, VesperSchemaV3.self, VesperSchemaV4.self, VesperSchemaV5.self, VesperSchemaV6.self, VesperSchemaV7.self, VesperSchemaV8.self, VesperSchemaV9.self]
+        [VesperSchemaV1.self, VesperSchemaV2.self, VesperSchemaV3.self, VesperSchemaV4.self, VesperSchemaV5.self, VesperSchemaV6.self, VesperSchemaV7.self, VesperSchemaV8.self, VesperSchemaV9.self, VesperSchemaV10.self]
     }
 
     static var stages: [MigrationStage] {
@@ -99,6 +107,7 @@ enum VesperMigrationPlan: SchemaMigrationPlan {
             MigrationStage.lightweight(fromVersion: VesperSchemaV6.self, toVersion: VesperSchemaV7.self),
             MigrationStage.lightweight(fromVersion: VesperSchemaV7.self, toVersion: VesperSchemaV8.self),
             MigrationStage.lightweight(fromVersion: VesperSchemaV8.self, toVersion: VesperSchemaV9.self),
+            MigrationStage.lightweight(fromVersion: VesperSchemaV9.self, toVersion: VesperSchemaV10.self),
         ]
     }
 }

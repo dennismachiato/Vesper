@@ -34,7 +34,6 @@ struct AITrainingView: View {
     @State private var isLoading = false
     @State private var loadingProgress: Double = 0
     @State private var isSaving = false
-    @State private var showDislikeSheet = false
     @State private var saveError: String?
 
     private var currentPhoto: TrainingPhoto? {
@@ -70,12 +69,6 @@ struct AITrainingView: View {
         .navigationTitle("Test the AI")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
-        .sheet(isPresented: $showDislikeSheet) {
-            DislikeReasonSheet { reason in
-                showDislikeSheet = false
-                saveCurrentFeedback(liked: false, isNeutral: false, reason: reason)
-            }
-        }
         .alert("Feedback Not Saved", isPresented: .init(
             get: { saveError != nil },
             set: { if !$0 { saveError = nil } }
@@ -105,7 +98,7 @@ struct AITrainingView: View {
                     .font(.title2.bold())
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
-                Text("Pick a recent batch of similar photos, then mark each one as Like, OK, or Dislike. This trains your local preference profile without uploading photos.")
+                Text("Pick a recent batch of similar photos, then rate each one from 1 to 5 stars. This trains your local preference profile without uploading photos.")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.55))
                     .multilineTextAlignment(.center)
@@ -190,17 +183,7 @@ struct AITrainingView: View {
 
             Spacer(minLength: 18)
 
-            HStack(spacing: 8) {
-                trainingButton(icon: "hand.thumbsup.fill", label: "Like", tint: .green) {
-                    saveCurrentFeedback(liked: true, isNeutral: false, reason: "")
-                }
-                trainingButton(icon: "hand.raised.fill", label: "OK", tint: .orange) {
-                    saveCurrentFeedback(liked: false, isNeutral: true, reason: "")
-                }
-                trainingButton(icon: "hand.thumbsdown.fill", label: "Dislike", tint: .red) {
-                    showDislikeSheet = true
-                }
-            }
+            trainingStarRatingControl(index: currentIndex)
             .padding(.horizontal, 20)
             .padding(.bottom, 8)
 
@@ -389,27 +372,63 @@ struct AITrainingView: View {
         }
     }
 
-    private func trainingButton(icon: String, label: String, tint: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 7) {
+    private func trainingStarRatingControl(index: Int) -> some View {
+        let rating = feedbackSaved[index]?.starRating ?? 0
+
+        return VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                ForEach(1...5, id: \.self) { star in
+                    Button {
+                        saveCurrentFeedback(starRating: star)
+                    } label: {
+                        Image(systemName: star <= rating ? "star.fill" : "star")
+                            .font(.system(size: 25, weight: .semibold))
+                            .foregroundStyle(star <= rating ? ratingTint(rating) : .white.opacity(0.32))
+                            .frame(width: 42, height: 42)
+                            .background(star == rating ? ratingTint(rating).opacity(0.12) : Color.white.opacity(0.04))
+                            .clipShape(Circle())
+                            .overlay(Circle().stroke(star == rating ? ratingTint(rating).opacity(0.26) : Color.white.opacity(0.08), lineWidth: 1))
+                    }
+                    .disabled(isSaving)
+                    .accessibilityLabel("\(star) star\(star == 1 ? "" : "s")")
+                }
+            }
+
+            HStack(spacing: 6) {
                 if isSaving {
                     ProgressView()
-                        .scaleEffect(0.75)
-                        .tint(tint)
-                } else {
-                    Image(systemName: icon)
+                        .scaleEffect(0.72)
+                        .tint(ratingTint(max(rating, 3)))
                 }
-                Text(label)
+                Text(rating == 0 ? "Rate this photo" : ratingLabel(rating))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(rating == 0 ? .white.opacity(0.45) : ratingTint(rating).opacity(0.9))
             }
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(tint)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
-            .background(tint.opacity(0.11))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(tint.opacity(0.20), lineWidth: 1))
         }
-        .disabled(isSaving)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(Color.vesperCard)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.vesperBorder, lineWidth: 1))
+    }
+
+    private func ratingTint(_ rating: Int) -> Color {
+        switch rating {
+        case 5: return .green
+        case 4: return Color.vesperAccent
+        case 3: return .orange
+        default: return .red
+        }
+    }
+
+    private func ratingLabel(_ rating: Int) -> String {
+        switch rating {
+        case 5: return "Highly preferred"
+        case 4: return "Decent pick"
+        case 3: return "OK"
+        case 2: return "Weak photo"
+        default: return "Not ideal"
+        }
     }
 
     private func comparisonPhoto(index: Int, label: String) -> some View {
@@ -487,12 +506,15 @@ struct AITrainingView: View {
         }
     }
 
-    private func saveCurrentFeedback(liked: Bool, isNeutral: Bool, reason: String) {
+    private func saveCurrentFeedback(starRating: Int, reason: String = "") {
         guard photos.indices.contains(currentIndex), feedbackSaved[currentIndex] == nil else { return }
         let index = currentIndex
         let image = photos[index].image
+        let rating = min(max(starRating, 1), 5)
+        let liked = rating >= 4
+        let isNeutral = rating == 3
 
-        feedbackSaved[index] = isNeutral ? .neutral : (liked ? .liked : .disliked)
+        feedbackSaved[index] = .rated(rating)
         isSaving = true
 
         Task {
@@ -503,7 +525,8 @@ struct AITrainingView: View {
                     isNeutral: isNeutral,
                     reason: reason,
                     imageEmbedding: embedding,
-                    purposeTag: ""
+                    purposeTag: "",
+                    starRating: rating
                 )
                 modelContext.insert(feedback)
                 do {
@@ -527,8 +550,8 @@ struct AITrainingView: View {
         savePairwiseFeedback(
             leftIndex: winnerIndex,
             rightIndex: loserIndex,
-            leftState: .liked,
-            rightState: .disliked,
+            leftRating: 5,
+            rightRating: 2,
             rightReason: "Preferred another photo"
         )
     }
@@ -537,16 +560,16 @@ struct AITrainingView: View {
         savePairwiseFeedback(
             leftIndex: leftIndex,
             rightIndex: rightIndex,
-            leftState: .neutral,
-            rightState: .neutral
+            leftRating: 3,
+            rightRating: 3
         )
     }
 
     private func savePairwiseFeedback(
         leftIndex: Int,
         rightIndex: Int,
-        leftState: GalleryView.FeedbackState,
-        rightState: GalleryView.FeedbackState,
+        leftRating: Int,
+        rightRating: Int,
         leftReason: String = "",
         rightReason: String = ""
     ) {
@@ -556,8 +579,10 @@ struct AITrainingView: View {
               feedbackSaved[rightIndex] == nil,
               !isSaving else { return }
 
-        feedbackSaved[leftIndex] = leftState
-        feedbackSaved[rightIndex] = rightState
+        let normalizedLeftRating = min(max(leftRating, 1), 5)
+        let normalizedRightRating = min(max(rightRating, 1), 5)
+        feedbackSaved[leftIndex] = .rated(normalizedLeftRating)
+        feedbackSaved[rightIndex] = .rated(normalizedRightRating)
         isSaving = true
 
         let leftImage = photos[leftIndex].image
@@ -569,22 +594,24 @@ struct AITrainingView: View {
 
             await MainActor.run {
                 let leftFeedback = PhotoFeedback(
-                    liked: leftState == .liked,
-                    isNeutral: leftState == .neutral,
+                    liked: normalizedLeftRating >= 4,
+                    isNeutral: normalizedLeftRating == 3,
                     reason: leftReason,
                     imageEmbedding: leftEmbedding,
                     reasonEmbedding: [],
                     purposeTag: "",
-                    contrastEmbedding: rightEmbedding
+                    contrastEmbedding: rightEmbedding,
+                    starRating: normalizedLeftRating
                 )
                 let rightFeedback = PhotoFeedback(
-                    liked: rightState == .liked,
-                    isNeutral: rightState == .neutral,
+                    liked: normalizedRightRating >= 4,
+                    isNeutral: normalizedRightRating == 3,
                     reason: rightReason,
                     imageEmbedding: rightEmbedding,
                     reasonEmbedding: [],
                     purposeTag: "",
-                    contrastEmbedding: leftEmbedding
+                    contrastEmbedding: leftEmbedding,
+                    starRating: normalizedRightRating
                 )
 
                 modelContext.insert(leftFeedback)

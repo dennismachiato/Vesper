@@ -196,11 +196,11 @@ struct StyleQuizView: View {
         let rejectedEmb  = CLIPTextEmbedder.shared?.embed(prompt: rejected.clipPrompt)  ?? []
 
         if !preferredEmb.isEmpty {
-            let like = PhotoFeedback(liked: true, imageEmbedding: preferredEmb, purposeTag: "quiz")
+            let like = PhotoFeedback(liked: true, imageEmbedding: preferredEmb, purposeTag: "quiz", starRating: 5)
             modelContext.insert(like)
         }
         if !rejectedEmb.isEmpty {
-            let dislike = PhotoFeedback(liked: false, imageEmbedding: rejectedEmb, purposeTag: "quiz")
+            let dislike = PhotoFeedback(liked: false, imageEmbedding: rejectedEmb, purposeTag: "quiz", starRating: 1)
             modelContext.insert(dislike)
         }
         do {

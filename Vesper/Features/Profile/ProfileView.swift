@@ -51,9 +51,9 @@ struct ProfileView: View {
     @State private var showExportShare = false
     @State private var exportFileURL: URL?
 
-    private var likedCount: Int { feedbackHistory.filter { $0.liked && !$0.isNeutral }.count }
-    private var neutralCount: Int { feedbackHistory.filter(\.isNeutral).count }
-    private var dislikedCount: Int { feedbackHistory.filter { !$0.liked && !$0.isNeutral }.count }
+    private var likedCount: Int { feedbackHistory.filter(\.isPositiveSignal).count }
+    private var neutralCount: Int { feedbackHistory.filter(\.isNeutralSignal).count }
+    private var dislikedCount: Int { feedbackHistory.filter(\.isNegativeSignal).count }
     private var multiPersonReferenceCount: Int { referencePhotos.filter { $0.faceCount > 1 }.count }
     private var clearSoloReferenceCount: Int {
         referencePhotos.filter { $0.faceCount == 1 && $0.sharpness >= 0.4 && $0.contrast >= 0.25 }.count
@@ -66,9 +66,9 @@ struct ProfileView: View {
         return "Low"
     }
     private var learningSignalSummary: LearningSignalSummary {
-        let rated = feedbackHistory.filter { !$0.isNeutral }
-        let liked = rated.filter(\.liked)
-        let disliked = rated.filter { !$0.liked }
+        let rated = feedbackHistory.filter { $0.preferenceSignal != 0 }
+        let liked = rated.filter(\.isPositiveSignal)
+        let disliked = rated.filter(\.isNegativeSignal)
         let recentCount = feedbackHistory.filter {
             Date().timeIntervalSince($0.createdAt) <= 30 * 86_400
         }.count
@@ -117,7 +117,7 @@ struct ProfileView: View {
             return LearningSignalSummary(
                 icon: "slider.horizontal.2.square",
                 title: "Mixed signal",
-                detail: "Liked and disliked photos look similar across the main scoring dimensions, so updates are dampened.\(recencyNote)",
+                detail: "High- and low-rated photos look similar across the main scoring dimensions, so updates are dampened.\(recencyNote)",
                 tint: .orange,
                 confidence: confidence
             )
@@ -142,8 +142,8 @@ struct ProfileView: View {
         )
     }
     private var learnedPreferenceInsights: [LearningInsight] {
-        let rated = feedbackHistory.filter { !$0.isNeutral }
-        let liked = rated.filter(\.liked)
+        let rated = feedbackHistory.filter { $0.preferenceSignal != 0 }
+        let liked = rated.filter(\.isPositiveSignal)
         guard rated.count >= 2, !liked.isEmpty else { return [] }
 
         func avg(_ values: [Float]) -> Float {
@@ -329,7 +329,7 @@ struct ProfileView: View {
                         Text("What Vesper Has Learned")
                             .font(.title3.bold())
                             .foregroundStyle(.white)
-                        Text("Use Like, Meh, or Dislike in results to teach Vesper your taste")
+                        Text("Use 1-5 star ratings in results to teach Vesper your taste")
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.45))
                     }
@@ -351,9 +351,9 @@ struct ProfileView: View {
                         .padding(32)
                     } else {
                         HStack(spacing: 12) {
-                            feedbackStat(icon: "hand.thumbsup.fill", value: likedCount, label: "Liked", color: .green)
-                            feedbackStat(icon: "hand.raised.fill", value: neutralCount, label: "Meh", color: .orange)
-                            feedbackStat(icon: "hand.thumbsdown.fill", value: dislikedCount, label: "Disliked", color: .red)
+                            feedbackStat(icon: "star.fill", value: likedCount, label: "4-5 Stars", color: .green)
+                            feedbackStat(icon: "star.leadinghalf.filled", value: neutralCount, label: "3 Stars", color: .orange)
+                            feedbackStat(icon: "star.slash.fill", value: dislikedCount, label: "1-2 Stars", color: .red)
                         }
 
                         learningSignalCard
@@ -390,7 +390,7 @@ struct ProfileView: View {
                             .padding(.top, 2)
                         }
 
-                        let reasonedDislikes = feedbackHistory.filter { !$0.liked && !$0.reason.isEmpty }
+                        let reasonedDislikes = feedbackHistory.filter { $0.isNegativeSignal && !$0.reason.isEmpty }
                         if !reasonedDislikes.isEmpty {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Recent feedback")
@@ -725,6 +725,7 @@ struct ProfileView: View {
                     createdAt: $0.createdAt,
                     liked: $0.liked,
                     isNeutral: $0.isNeutral,
+                    starRating: $0.effectiveStarRating,
                     reason: $0.reason,
                     purposeTag: $0.purposeTag
                 )
@@ -833,6 +834,7 @@ struct VesperDataExport: Codable {
         let createdAt: Date
         let liked: Bool
         let isNeutral: Bool
+        let starRating: Int
         let reason: String
         let purposeTag: String
     }

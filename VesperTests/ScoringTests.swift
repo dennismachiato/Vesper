@@ -402,6 +402,43 @@ final class ScoringTests: XCTestCase {
             "Mixed/low-separation feedback should be much weaker than a clear preference signal")
     }
 
+    func test_learnedWeights_starRatingsScaleSignalStrength() {
+        let strongLikes = (0..<12).map { _ in
+            makeFeedback(liked: true, quality: 0.65, starRating: 5)
+        }
+        let strongDislikes = (0..<12).map { _ in
+            makeFeedback(liked: false, quality: 0.45, starRating: 1)
+        }
+        let softLikes = (0..<12).map { _ in
+            makeFeedback(liked: true, quality: 0.65, starRating: 4)
+        }
+        let softDislikes = (0..<12).map { _ in
+            makeFeedback(liked: false, quality: 0.45, starRating: 2)
+        }
+
+        let strongWeight = processor.learnedWeightMultipliers(from: strongLikes + strongDislikes)["qualityScore"] ?? 1.0
+        let softWeight = processor.learnedWeightMultipliers(from: softLikes + softDislikes)["qualityScore"] ?? 1.0
+
+        XCTAssertGreaterThan(strongWeight, softWeight,
+            "5-vs-1 feedback should train a stronger preference than 4-vs-2 feedback")
+        XCTAssertGreaterThan(softWeight, 1.0,
+            "4-vs-2 feedback should still train the model, just more gently")
+    }
+
+    func test_learnedWeights_threeStarRatingsStayNeutral() {
+        let neutralHighQuality = (0..<10).map { _ in
+            makeFeedback(liked: false, quality: 0.90, starRating: 3)
+        }
+        let neutralLowQuality = (0..<10).map { _ in
+            makeFeedback(liked: false, quality: 0.10, starRating: 3)
+        }
+
+        let weights = processor.learnedWeightMultipliers(from: neutralHighQuality + neutralLowQuality)
+
+        XCTAssertTrue(weights.isEmpty,
+            "3-star feedback should be stored as acceptable/neutral, not as positive or negative training")
+    }
+
     func test_learnedWeights_zeroEvents_returnsEmpty() {
         XCTAssertTrue(processor.learnedWeightMultipliers(from: []).isEmpty,
             "Zero feedback events should produce no weights")
@@ -506,7 +543,8 @@ final class ScoringTests: XCTestCase {
         reference: Float = 0.5,
         yaw: Float = 0,
         userFaceIdentified: Bool = false,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        starRating: Int = 0
     ) -> PhotoFeedback {
         let fb = PhotoFeedback(
             liked: liked,
@@ -519,7 +557,8 @@ final class ScoringTests: XCTestCase {
             eyeOpenConfidence: eyes,
             colorHarmonyScore: color,
             referenceScore: reference,
-            userFaceIdentified: userFaceIdentified
+            userFaceIdentified: userFaceIdentified,
+            starRating: starRating
         )
         fb.createdAt = createdAt
         return fb

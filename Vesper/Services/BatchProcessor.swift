@@ -217,11 +217,20 @@ class BatchProcessor {
     }
 
     func learnedWeightMultipliers(from feedbackHistory: [PhotoFeedback]) -> [String: Float] {
-        let liked    = feedbackHistory.filter { $0.liked && !$0.isNeutral }
-        let disliked = feedbackHistory.filter { !$0.liked && !$0.isNeutral }
         let now = Date()
-        let likedWeighted = liked.map { (feedback: $0, weight: preferenceEvidenceWeight(for: $0, now: now)) }
-        let dislikedWeighted = disliked.map { (feedback: $0, weight: preferenceEvidenceWeight(for: $0, now: now)) }
+        let weightedFeedback = feedbackHistory.map { feedback in
+            (
+                feedback: feedback,
+                signal: feedback.preferenceSignal,
+                evidenceWeight: preferenceEvidenceWeight(for: feedback, now: now)
+            )
+        }
+        let likedWeighted = weightedFeedback
+            .filter { $0.signal > 0 }
+            .map { (feedback: $0.feedback, weight: $0.evidenceWeight * $0.signal) }
+        let dislikedWeighted = weightedFeedback
+            .filter { $0.signal < 0 }
+            .map { (feedback: $0.feedback, weight: $0.evidenceWeight * abs($0.signal)) }
         let rawEvidence = likedWeighted.map(\.weight).reduce(0, +) + dislikedWeighted.map(\.weight).reduce(0, +)
         guard rawEvidence >= 0.25 else { return [:] }   // need at least one meaningful recent-ish event
 
@@ -297,9 +306,10 @@ class BatchProcessor {
     /// the mean absolute yaw (radians) of liked, identified self-photos; weightedScore then applies
     /// a small bonus to new photos whose user-face yaw sits close to it.
     func learnedPreferredYaw(from feedbackHistory: [PhotoFeedback]) -> Float? {
-        let likedSelf = feedbackHistory.filter { $0.liked && !$0.isNeutral && $0.userFaceIdentified }
         let now = Date()
-        let weighted = likedSelf.map { (yaw: abs($0.photoFaceYaw), weight: preferenceEvidenceWeight(for: $0, now: now)) }
+        let weighted = feedbackHistory
+            .filter { $0.preferenceSignal > 0 && $0.userFaceIdentified }
+            .map { (yaw: abs($0.photoFaceYaw), weight: preferenceEvidenceWeight(for: $0, now: now) * $0.preferenceSignal) }
         let totalWeight = weighted.map(\.weight).reduce(0, +)
         guard totalWeight >= 5 else { return nil }
         return weighted.reduce(Float(0)) { $0 + $1.yaw * $1.weight } / totalWeight
@@ -309,17 +319,17 @@ class BatchProcessor {
     /// Returns 0...1 where 0 means use the default closed-eye penalty and 1 means a strong
     /// closed-eye portrait can be treated as intentional when expression/angle/style also work.
     func learnedClosedEyeTolerance(from feedbackHistory: [PhotoFeedback]) -> Float {
-        let rated = feedbackHistory.filter { !$0.isNeutral }
+        let rated = feedbackHistory.filter { $0.preferenceSignal != 0 }
         let closedAll = rated.filter { $0.photoEyeOpenConfidence < 0.35 }
         let closedSelf = closedAll.filter(\.userFaceIdentified)
         let closed = closedSelf.isEmpty ? closedAll : closedSelf
         guard !closed.isEmpty else { return 0 }
 
-        let likedClosed = closed.filter(\.liked)
-        let dislikedClosed = closed.filter { !$0.liked }
+        let likedClosed = closed.filter { $0.preferenceSignal > 0 }
+        let dislikedClosed = closed.filter { $0.preferenceSignal < 0 }
         let now = Date()
-        let likedWeight = likedClosed.map { preferenceEvidenceWeight(for: $0, now: now) }.reduce(0, +)
-        let dislikedWeight = dislikedClosed.map { preferenceEvidenceWeight(for: $0, now: now) }.reduce(0, +)
+        let likedWeight = likedClosed.map { preferenceEvidenceWeight(for: $0, now: now) * $0.preferenceSignal }.reduce(0, +)
+        let dislikedWeight = dislikedClosed.map { preferenceEvidenceWeight(for: $0, now: now) * abs($0.preferenceSignal) }.reduce(0, +)
         let rawEvidence = likedWeight + dislikedWeight
         let n = effectiveEvidenceCount(rawEvidence)
         guard n > 0 else { return 0 }
@@ -334,7 +344,7 @@ class BatchProcessor {
             avgContext = 0.5
         } else {
             avgContext = likedClosed.reduce(Float(0)) { partial, feedback in
-                let weight = preferenceEvidenceWeight(for: feedback, now: now)
+                let weight = preferenceEvidenceWeight(for: feedback, now: now) * feedback.preferenceSignal
                 return partial + closedEyeContextScore(
                     quality: feedback.photoQualityScore,
                     expression: feedback.photoGenuineSmileScore,

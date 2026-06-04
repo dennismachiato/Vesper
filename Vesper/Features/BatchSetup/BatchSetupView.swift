@@ -106,35 +106,35 @@ struct BatchSetupView: View {
     }
 
     private var likedEmbeddings: [(embedding: [Float], date: Date)] {
-        purposeFilteredFeedback.filter { $0.liked && !$0.isNeutral }
+        purposeFilteredFeedback.filter(\.isPositiveSignal)
             .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt) }
     }
 
     private var neutralEmbeddings: [(embedding: [Float], date: Date)] {
-        purposeFilteredFeedback.filter { $0.isNeutral }
+        purposeFilteredFeedback.filter(\.isNeutralSignal)
             .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt) }
     }
 
     private var dislikedEmbeddings: [(embedding: [Float], date: Date)] {
-        purposeFilteredFeedback.filter { !$0.liked && !$0.isNeutral }
+        purposeFilteredFeedback.filter(\.isNegativeSignal)
             .compactMap { f in f.imageEmbedding.isEmpty ? nil : (f.imageEmbedding, f.createdAt) }
     }
 
     private var dislikeReasonEmbeddings: [(embedding: [Float], date: Date)] {
-        purposeFilteredFeedback.filter { !$0.liked && !$0.isNeutral }
+        purposeFilteredFeedback.filter(\.isNegativeSignal)
             .compactMap { f in f.reasonEmbedding.isEmpty ? nil : (f.reasonEmbedding, f.createdAt) }
     }
 
     /// Embeddings of photos seen just before liked photos — the implicit "runner-up" that was rejected.
     /// Used as a mild contrastive penalty: photos similar to these get a small score reduction.
     private var contrastEmbeddings: [(embedding: [Float], date: Date)] {
-        purposeFilteredFeedback.filter { $0.liked && !$0.isNeutral }
+        purposeFilteredFeedback.filter(\.isPositiveSignal)
             .compactMap { f in f.contrastEmbedding.isEmpty ? nil : (f.contrastEmbedding, f.createdAt) }
     }
 
     /// Raw dislike reason strings — passed to BatchProcessor for dimension hint extraction.
     private var dislikeReasons: [String] {
-        purposeFilteredFeedback.filter { !$0.liked && !$0.isNeutral && !$0.reason.isEmpty }
+        purposeFilteredFeedback.filter { $0.isNegativeSignal && !$0.reason.isEmpty }
             .map(\.reason)
     }
 

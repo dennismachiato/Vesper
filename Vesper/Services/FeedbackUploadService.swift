@@ -3,6 +3,7 @@
 //  Vesper
 //
 
+import FirebaseCore
 import FirebaseFirestore
 import UIKit
 import OSLog
@@ -11,7 +12,6 @@ private let feedbackUploadLogger = Logger(subsystem: "Vesper", category: "Feedba
 
 class FeedbackUploadService {
     static let shared = FeedbackUploadService()
-    private let db = Firestore.firestore()
     private var recentUploads: [Date] = []
     private let maxUploadsPerMinute = 10
     private init() {}
@@ -19,6 +19,7 @@ class FeedbackUploadService {
     /// Upload anonymous feedback. photoThumbnailData only included if user opted in.
     func upload(
         liked: Bool,
+        starRating: Int? = nil,
         reason: String,
         category: String,
         aesthetic: String,
@@ -54,6 +55,9 @@ class FeedbackUploadService {
             "timestamp": FieldValue.serverTimestamp(),
             "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
         ]
+        if let starRating {
+            data["starRating"] = min(max(starRating, 1), 5)
+        }
 
         if let ps = promptScore, ps.isFinite { data["promptScore"] = min(max(ps, 0), 1) }
         if let rs = referenceScore, rs.isFinite { data["referenceScore"] = min(max(rs, 0), 1) }
@@ -66,6 +70,12 @@ class FeedbackUploadService {
             data["thumbnailBase64"] = jpeg.base64EncodedString()
         }
 
+        guard FirebaseApp.app() != nil else {
+            feedbackUploadLogger.warning("Skipping feedback upload because Firebase is not configured.")
+            return
+        }
+
+        let db = Firestore.firestore()
         db.collection("feedback").addDocument(data: data) { error in
             if let error = error {
                 feedbackUploadLogger.error("Feedback upload failed: \(error.localizedDescription, privacy: .private)")

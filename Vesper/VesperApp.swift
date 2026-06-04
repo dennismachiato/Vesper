@@ -57,7 +57,7 @@ struct VesperApp: App {
     }()
 
     static func makeModelContainer(isStoredInMemoryOnly: Bool = false) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: VesperSchemaV9.self)
+        let schema = Schema(versionedSchema: VesperSchemaV10.self)
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: isStoredInMemoryOnly)
         return try ModelContainer(for: schema, configurations: config)
     }
@@ -98,8 +98,10 @@ struct VesperApp: App {
         #endif
         AppCheck.setAppCheckProviderFactory(providerFactory)
 
-        FirebaseApp.configure()
-        Task { await RemoteConfigService.shared.fetch() }
+        let firebaseConfigured = VesperApp.configureFirebaseIfAvailable()
+        if firebaseConfigured {
+            Task { await RemoteConfigService.shared.fetch() }
+        }
 
         // Detect iCloud-restored install: AppStorage flags roll forward via
         // NSUbiquitousKeyValueStore even after reinstall, but SwiftData doesn't.
@@ -132,6 +134,20 @@ struct VesperApp: App {
             defaults.set(false, forKey: "hasCompletedOnboarding")
             defaults.set(false, forKey: "hasCompletedStyleQuiz")
         }
+    }
+
+    @discardableResult
+    private static func configureFirebaseIfAvailable() -> Bool {
+        guard FirebaseApp.app() == nil else { return true }
+
+        guard let path = Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist"),
+              let options = FirebaseOptions(contentsOfFile: path) else {
+            appLogger.warning("Firebase config file is missing; remote config and feedback uploads are disabled.")
+            return false
+        }
+
+        FirebaseApp.configure(options: options)
+        return true
     }
 
     var body: some Scene {
