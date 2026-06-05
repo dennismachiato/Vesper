@@ -43,6 +43,41 @@ struct AITrainingView: View {
 
     private var ratedCount: Int { feedbackSaved.count }
     private var isComplete: Bool { !photos.isEmpty && ratedCount == photos.count && !isSaving }
+    private var trainingHighCount: Int {
+        feedbackSaved.values.filter { $0.starRating >= 4 }.count
+    }
+    private var trainingNeutralCount: Int {
+        feedbackSaved.values.filter { $0.starRating == 3 }.count
+    }
+    private var trainingLowCount: Int {
+        feedbackSaved.values.filter { $0.starRating <= 2 }.count
+    }
+    private var trainingCompletionSummary: String {
+        "\(ratedCount) rating\(ratedCount == 1 ? "" : "s") \(ratedCount == 1 ? "was" : "were") added to your local preference profile. Future batches can use this signal right away."
+    }
+    private var trainingLearningBullets: [String] {
+        var bullets: [String] = []
+
+        if trainingHighCount > 0 && trainingLowCount > 0 {
+            bullets.append("Vesper captured contrast: what you prefer and what you want it to avoid.")
+        } else if trainingHighCount > 0 {
+            bullets.append("Vesper captured positive examples. Add low ratings later to sharpen the boundary.")
+        } else if trainingLowCount > 0 {
+            bullets.append("Vesper captured avoid signals. Add strong picks later so it knows what to aim for.")
+        } else {
+            bullets.append("Neutral ratings organize the batch without pushing future scores too aggressively.")
+        }
+
+        if feedbackRecords.values.contains(where: { !$0.contrastEmbedding.isEmpty }) {
+            bullets.append("Pairwise comparisons teach which photo wins when two shots look similar.")
+        }
+
+        if trainingNeutralCount > 0 {
+            bullets.append("Backup ratings stay useful, but they are intentionally lighter than strong high or low ratings.")
+        }
+
+        return Array(bullets.prefix(3))
+    }
     private var currentPair: (left: Int, right: Int)? {
         guard photos.count >= 2 else { return nil }
         let unrated = photos.indices.filter { feedbackSaved[$0] == nil }
@@ -340,12 +375,44 @@ struct AITrainingView: View {
                 Text("Training Saved")
                     .font(.title2.bold())
                     .foregroundStyle(.white)
-                Text("\(ratedCount) ratings were added to your local preference profile. Future batches can use this signal right away.")
+                Text(trainingCompletionSummary)
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.55))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 34)
             }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("What Vesper Learned")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.white)
+
+                HStack(spacing: 8) {
+                    trainingMetric(title: "Preferred", value: "\(trainingHighCount)", tint: .green)
+                    trainingMetric(title: "Backup", value: "\(trainingNeutralCount)", tint: .orange)
+                    trainingMetric(title: "Avoid", value: "\(trainingLowCount)", tint: .red)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(trainingLearningBullets, id: \.self) { bullet in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "sparkle")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(Color.vesperAccent)
+                                .frame(width: 14, height: 14)
+                            Text(bullet)
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.52))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+            .padding(16)
+            .background(Color.white.opacity(0.045))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
+            .padding(.horizontal, 28)
 
             VStack(spacing: 12) {
                 Button {
@@ -370,6 +437,24 @@ struct AITrainingView: View {
 
             Spacer()
         }
+    }
+
+    private func trainingMetric(title: String, value: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.headline.bold().monospacedDigit())
+                .foregroundStyle(.white.opacity(0.9))
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.38))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(tint.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(tint.opacity(0.16), lineWidth: 1))
     }
 
     private func trainingStarRatingControl(index: Int) -> some View {

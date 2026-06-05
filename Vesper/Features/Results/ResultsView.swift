@@ -186,6 +186,7 @@ struct ResultsView: View {
                     }
 
                     guidedReviewSection
+                    batchSummarySection
 
                     if isDatingMode {
                         // Dating mode: uniform 3-column grid — no oversized hero
@@ -834,6 +835,72 @@ struct ResultsView: View {
         .padding(.horizontal)
     }
 
+    private var batchSummarySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "chart.bar.doc.horizontal")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.vesperAccent)
+                    .frame(width: 28, height: 28)
+                    .background(Color.vesperAccent.opacity(0.12))
+                    .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Batch Summary")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.white)
+                    Text(batchSummaryText)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.48))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+            }
+
+            HStack(spacing: 8) {
+                summaryMetric(title: "Top", value: "\(topPicks.count)", tint: Color.vesperAccent)
+                summaryMetric(title: "Alt", value: "\(runnerUps.count)", tint: .cyan)
+                summaryMetric(title: "Rated", value: "\(ratedPhotoCount)", tint: .green)
+                summaryMetric(title: "Review", value: "\(deleteCandidates.count + similars.count)", tint: .red)
+            }
+
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Color.vesperAccent.opacity(0.8))
+                    .frame(width: 15, height: 15)
+                Text(learningSummaryText)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.42))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .padding(.horizontal)
+    }
+
+    private func summaryMetric(title: String, value: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.headline.bold().monospacedDigit())
+                .foregroundStyle(.white.opacity(0.88))
+                .lineLimit(1)
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.38))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(tint.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(tint.opacity(0.14), lineWidth: 1))
+    }
+
     private func reviewStepChip(icon: String, title: String, value: String, tint: Color) -> some View {
         HStack(spacing: 7) {
             Image(systemName: icon)
@@ -868,8 +935,43 @@ struct ResultsView: View {
         topPicks.filter { sessionFeedback[$0.id] != nil }.count
     }
 
+    private var highRatedCount: Int {
+        sessionFeedback.values.filter { $0.starRating >= 4 }.count
+    }
+
+    private var neutralRatedCount: Int {
+        sessionFeedback.values.filter { $0.starRating == 3 }.count
+    }
+
+    private var lowRatedCount: Int {
+        sessionFeedback.values.filter { $0.starRating <= 2 }.count
+    }
+
     private var firstUnratedTopPickIndex: Int? {
         topPicks.firstIndex { sessionFeedback[$0.id] == nil }
+    }
+
+    private var batchSummaryText: String {
+        if ratedPhotoCount == 0 {
+            return "Vesper found \(topPicks.count) top pick\(topPicks.count == 1 ? "" : "s") and \(runnerUps.count) alternate\(runnerUps.count == 1 ? "" : "s"). Rate photos to turn this into a personalized batch."
+        }
+        return "\(highRatedCount) preferred, \(neutralRatedCount) backup, \(lowRatedCount) cleanup signal\(lowRatedCount == 1 ? "" : "s") saved from this batch."
+    }
+
+    private var learningSummaryText: String {
+        if ratedPhotoCount == 0 {
+            return "No preference signal yet. One rating is useful, but patterns get stronger after a few high and low examples."
+        }
+        if highRatedCount > 0 && lowRatedCount > 0 {
+            return "This batch gives Vesper contrast: what to prefer and what to avoid in similar photo contexts."
+        }
+        if highRatedCount > 0 {
+            return "Positive examples are saved. Add a few low ratings when photos miss your taste so Vesper learns the boundary."
+        }
+        if lowRatedCount > 0 {
+            return "Cleanup signals are saved. Add a few strong ratings too so Vesper knows what to aim for."
+        }
+        return "Backup ratings are saved as neutral context, so they organize the batch without pushing the model too hard."
     }
 
     private var nextReviewStepText: String {
@@ -890,7 +992,7 @@ struct ResultsView: View {
         let photos = galleryPhotos(for: pool)
         let startIndex = galleryStartIndex ?? 0
         let showReasoning = galleryShowsReasoning(pool)
-        let contextScores = topPicks + runnerUps
+        let contextScores = allVisibleResults
 
         return GalleryView(
             photos: photos,
@@ -1760,6 +1862,13 @@ struct GalleryView: View {
                         .id("\(currentIndex)-reasoning")  // forces full re-render on photo change
                     }
 
+                    if let result = current,
+                       let comparisonInsight = comparisonInsight(for: result) {
+                        comparisonInsightCard(comparisonInsight)
+                            .padding(.horizontal, 16)
+                            .padding(.top, showReasoning ? 8 : 0)
+                    }
+
                     if let result = current {
                         starRatingControl(result: result)
                             .padding(.horizontal, 20)
@@ -2141,6 +2250,83 @@ struct GalleryView: View {
         .background(Color.vesperCard)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.vesperBorder, lineWidth: 1))
+    }
+
+    private func comparisonInsightCard(_ insight: String) -> some View {
+        let title = insight.hasPrefix("This ranked ahead") || insight.hasPrefix("Nearby frames were close")
+            ? "Why this beat nearby shots"
+            : "Nearby comparison"
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                Image(systemName: "arrow.left.arrow.right.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(Color.vesperAccent)
+                Text(title)
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.white)
+                Spacer()
+            }
+
+            Text(insight)
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.58))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.045))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
+    }
+
+    private func comparisonInsight(for result: PhotoResult) -> String? {
+        let note = result.batchComparisonNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !note.isEmpty || result.batchRelativeScore != 0.5 else { return nil }
+
+        if note == "Best frame among similar shots" || result.batchRelativeScore >= 0.82 {
+            return "This ranked ahead of nearby frames because \(naturalList(comparisonStrengths(for: result)))."
+        }
+
+        if note.hasPrefix("A similar frame") {
+            return "\(note). If you still prefer this version, a high star rating teaches Vesper that your taste beats the default comparison."
+        }
+
+        return "Nearby frames were close. This one currently has the stronger overall mix of \(naturalList(comparisonStrengths(for: result)))."
+    }
+
+    private func comparisonStrengths(for result: PhotoResult) -> [String] {
+        var strengths: [String] = []
+        if result.qualityScore >= 0.62 { strengths.append("sharpness") }
+        if result.exposureScore >= 0.58 { strengths.append("lighting") }
+        if result.compositionScore >= 0.58 { strengths.append("composition") }
+        if result.hasFace {
+            if result.eyeState == .open && result.eyeOpenConfidence >= 0.70 {
+                strengths.append("clear eyes")
+            } else if result.eyeState == .unknown && result.eyeOcclusionScore > 0.45 {
+                strengths.append("less certain but not clearly closed eyes")
+            }
+            if result.eyeSymmetryScore >= 0.68 { strengths.append("balanced eyes") }
+            if result.genuineSmileScore >= 0.55 { strengths.append("expression") }
+            if abs(result.faceYaw) < 0.32 { strengths.append("face angle") }
+        }
+        if (result.referenceScore ?? 0) >= 0.55 { strengths.append("style match") }
+        if result.batchRelativeScore >= 0.70 { strengths.append("same-moment comparison") }
+        if strengths.isEmpty { strengths.append("technical quality") }
+        return Array(strengths.prefix(3))
+    }
+
+    private func naturalList(_ items: [String]) -> String {
+        switch items.count {
+        case 0:
+            return "overall quality"
+        case 1:
+            return items[0]
+        case 2:
+            return "\(items[0]) and \(items[1])"
+        default:
+            return "\(items.dropLast().joined(separator: ", ")), and \(items.last ?? "")"
+        }
     }
 
     private func ratingTint(_ rating: Int) -> Color {
