@@ -105,6 +105,15 @@ enum AIDiagnosticAnalyzer {
         let lowIdentityMatches = photos.filter {
             $0.result.faceCount > 1 && $0.result.userFaceIdentified && $0.result.userFaceMatchConfidence < 0.56
         }
+        let styleMatchWithoutIdentity = photos.filter {
+            $0.result.hasFace &&
+            !$0.result.userFaceIdentified &&
+            ($0.result.referenceScore ?? 0) > 0.58
+        }
+        let mixedRatings = {
+            let rated = photos.compactMap(\.rating)
+            return rated.contains { $0 >= 4 } && rated.contains { $0 <= 2 }
+        }()
         let noDeleteCandidates = photos.contains { $0.pool == .deleteCandidates } == false && photos.count >= 10
 
         var issues: [AIDiagnosticIssue] = []
@@ -160,6 +169,24 @@ enum AIDiagnosticAnalyzer {
                 title: "Low-confidence identity matches",
                 detail: "Group-photo scoring may be anchored to the wrong face.",
                 count: lowIdentityMatches.count
+            ))
+        }
+        if !styleMatchWithoutIdentity.isEmpty {
+            issues.append(AIDiagnosticIssue(
+                id: "styleWithoutIdentity",
+                severity: .info,
+                title: "Style match without identity",
+                detail: "Reference style can match even when the user's face is not confidently identified.",
+                count: styleMatchWithoutIdentity.count
+            ))
+        }
+        if !mixedRatings && photos.contains(where: { $0.rating != nil }) {
+            issues.append(AIDiagnosticIssue(
+                id: "oneSidedFeedback",
+                severity: .info,
+                title: "One-sided rating signal",
+                detail: "Preference learning is stronger after both high and low ratings in the same visual context.",
+                count: photos.compactMap(\.rating).count
             ))
         }
         if noDeleteCandidates {
@@ -258,7 +285,9 @@ struct AIDiagnosticsView: View {
                 coverageRow(title: "Obscured eyes", detail: "Sunglasses, shadows, hair", count: count { $0.result.eyeOcclusionScore > 0.55 }, icon: "sunglasses.fill", tint: .teal)
                 coverageRow(title: "Closed eyes", detail: "Confident blink/closed-eye frames", count: count { $0.result.eyeState == .closed }, icon: "eye.slash.fill", tint: .purple)
                 coverageRow(title: "Uneven eyes", detail: "Visible eye asymmetry", count: count { $0.result.eyeSymmetryScore < 0.55 && $0.result.eyeOcclusionScore < 0.45 }, icon: "eye.trianglebadge.exclamationmark", tint: .orange)
-                coverageRow(title: "Group identity", detail: "Multiple faces with face matching", count: count { $0.result.faceCount > 1 }, icon: "person.3.fill", tint: .cyan)
+                coverageRow(title: "Identity matches", detail: "User face confidently matched", count: count { $0.result.userFaceIdentified }, icon: "person.crop.circle.badge.checkmark", tint: .cyan)
+                coverageRow(title: "Reference style", detail: "Aesthetic similarity, not identity", count: count { ($0.result.referenceScore ?? 0) > 0.52 }, icon: "sparkles", tint: .green)
+                coverageRow(title: "Preference learning", detail: learningSignalDetail, count: ratings.count, icon: "slider.horizontal.3", tint: .pink)
                 coverageRow(title: "Similar frames", detail: "Burst or same-moment comparison", count: count { $0.pool == .similars || $0.result.batchRelativeScore != 0.5 }, icon: "rectangle.stack.fill", tint: .yellow)
             }
             .padding(.horizontal)
@@ -358,6 +387,24 @@ struct AIDiagnosticsView: View {
         guard !photos.isEmpty else { return "0.00" }
         let avg = photos.map(\.result.compositeScore).reduce(0, +) / Float(photos.count)
         return String(format: "%.2f", avg)
+    }
+
+    private var learningSignalDetail: String {
+        let values = photos.compactMap(\.rating)
+        guard !values.isEmpty else { return "No ratings in this batch yet" }
+        let high = values.filter { $0 >= 4 }.count
+        let neutral = values.filter { $0 == 3 }.count
+        let low = values.filter { $0 <= 2 }.count
+        if high > 0 && low > 0 {
+            return "\(high) high, \(neutral) neutral, \(low) low"
+        }
+        if high > 0 {
+            return "\(high) high ratings; add low ratings for contrast"
+        }
+        if low > 0 {
+            return "\(low) low ratings; add high ratings for contrast"
+        }
+        return "\(neutral) neutral ratings"
     }
 
     private func count(where predicate: (AIDiagnosticPhoto) -> Bool) -> Int {
@@ -476,8 +523,8 @@ struct AIDiagnosticsView: View {
                 signalBar("Eyes", result.eyeOpenConfidence, detail: result.eyeState.rawValue, tint: result.eyeState == .closed ? .red : Color.vesperAccent)
                 signalBar("Occlusion", result.eyeOcclusionScore, tint: .teal)
                 signalBar("Symmetry", result.eyeSymmetryScore, tint: .orange)
-                signalBar("Face match", result.userFaceMatchConfidence, detail: result.userFaceIdentified ? "identified" : "not matched", tint: .purple)
-                signalBar("Reference", result.referenceScore ?? 0.5, detail: result.referenceScore == nil ? "none" : nil, tint: .green)
+                signalBar("Identity", result.userFaceMatchConfidence, detail: result.userFaceIdentified ? "user matched" : "not matched", tint: .purple)
+                signalBar("Style ref", result.referenceScore ?? 0.5, detail: result.referenceScore == nil ? "none" : "style only", tint: .green)
                 signalBar("Feedback", result.feedbackScore ?? 0.5, detail: result.feedbackScore == nil ? "none" : nil, tint: .yellow)
                 signalBar("Batch compare", result.batchRelativeScore, detail: result.batchComparisonNote.isEmpty ? nil : result.batchComparisonNote, tint: .pink)
             }

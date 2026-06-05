@@ -206,8 +206,9 @@ final class ReasoningTests: XCTestCase {
 
     func test_strongReferenceMatch_claimedAbove70() {
         let s = PhotoScore.make(referenceScore: 0.75)
-        // Current copy: "Very close to your reference photos — strong style match" for rs > 0.72
-        XCTAssertTrue(reason(s).contains("Very close to your reference photos"))
+        XCTAssertTrue(reason(s).contains("reference style") || reason(s).contains("reference photos"))
+        XCTAssertFalse(reason(s).contains("Identified"),
+            "Reference style similarity should not imply identity recognition")
     }
 
     func test_styleMatch_between45and70() {

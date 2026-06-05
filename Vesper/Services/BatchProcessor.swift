@@ -982,7 +982,7 @@ class BatchProcessor {
     func applyBatchRelativeSignals(to scores: inout [PhotoScore]) {
         guard scores.count > 1 else { return }
 
-        let clusters = similarPhotoClusters(scores, threshold: 0.82)
+        let clusters = similarPhotoClusters(scores, threshold: 0.86)
         for cluster in clusters where cluster.count >= 2 {
             let qualityValues = cluster.map { batchFrameQuality(scores[$0]) }
             guard let maxQuality = qualityValues.max(),
@@ -1022,7 +1022,8 @@ class BatchProcessor {
 
             var assigned = false
             for rep in representatives {
-                if CLIPEmbedder.cosineSimilarity(embedding, rep.embedding) >= threshold {
+                if CLIPEmbedder.cosineSimilarity(embedding, rep.embedding) >= threshold,
+                   isSameMomentCandidate(scores[index], scores[clusters[rep.clusterIndex][0]]) {
                     clusters[rep.clusterIndex].append(index)
                     assigned = true
                     break
@@ -1035,6 +1036,22 @@ class BatchProcessor {
             }
         }
         return clusters
+    }
+
+    private func isSameMomentCandidate(_ lhs: PhotoScore, _ rhs: PhotoScore) -> Bool {
+        guard lhs.hasFace == rhs.hasFace else { return false }
+        if lhs.hasFace {
+            guard abs(lhs.faceYaw - rhs.faceYaw) <= 0.42 else { return false }
+            guard abs(lhs.subjectHeight - rhs.subjectHeight) <= 0.35 else { return false }
+            guard abs(lhs.compositionScore - rhs.compositionScore) <= 0.38 else { return false }
+            if lhs.faceCount > 0, rhs.faceCount > 0, abs(lhs.faceCount - rhs.faceCount) > 1 {
+                return false
+            }
+        } else {
+            guard abs(lhs.compositionScore - rhs.compositionScore) <= 0.42 else { return false }
+            guard lhs.hasAnimal == rhs.hasAnimal else { return false }
+        }
+        return true
     }
 
     private func batchFrameQuality(_ score: PhotoScore) -> Float {
@@ -1070,6 +1087,9 @@ class BatchProcessor {
 
     private func weakestSimilarFrameReason(_ score: PhotoScore) -> String {
         if score.hasFace {
+            if score.eyeState == .unknown && score.eyeOcclusionScore > 0.55 {
+                return "A similar frame shows the face more clearly"
+            }
             if score.eyeState == .closed {
                 return "A similar frame has cleaner eye expression"
             }
@@ -1140,8 +1160,9 @@ class BatchProcessor {
 
         // Greedy clustering: iterate through photos; assign to an existing cluster if
         // cosine similarity to the cluster's representative > threshold, else start new cluster.
-        // 0.78 catches burst shots and same-pose variants while allowing different moments to compete.
-        let threshold: Float = 0.78
+        // 0.86 catches true burst shots and same-pose variants without collapsing an entire
+        // same-location session into one giant "similar" group.
+        let threshold: Float = 0.86
         var clusterRep: [Int] = []       // index of representative for each cluster
         var photoCluster: [Int] = Array(repeating: -1, count: scores.count)
 
@@ -1156,7 +1177,8 @@ class BatchProcessor {
             var assigned = false
             for (c, rep) in clusterRep.enumerated() {
                 if let repEmb = scores[rep].clipEmbedding {
-                    if CLIPEmbedder.cosineSimilarity(emb, repEmb) >= threshold {
+                    if CLIPEmbedder.cosineSimilarity(emb, repEmb) >= threshold,
+                       isSameMomentCandidate(scores[i], scores[rep]) {
                         photoCluster[i] = c
                         assigned = true
                         break
@@ -2068,7 +2090,7 @@ class BatchProcessor {
 
             // Reference / prompt match
             if let rs = score.referenceScore, rs > 0.52 {
-                sigs.append(RUSignal(text: pick(["Matches your reference photo style", "Style aligns with your references", "Consistent with your reference look"], for: score), weight: rs))
+                sigs.append(RUSignal(text: pick(["Matches your reference photo style", "Style aligns with your references", "Consistent with your reference aesthetic"], for: score), weight: rs))
             } else if let ps = score.promptScore, ps > 0.22 {
                 sigs.append(RUSignal(text: pick(["Decent content match for your prompt", "Relevant to what you're looking for", "Matches the prompt reasonably well"], for: score), weight: ps))
             }
@@ -2131,9 +2153,9 @@ class BatchProcessor {
             switch purposeTag {
             case BatchPurpose.social.rawValue:
                 highPool = ["Matches your Instagram aesthetic — on-brand for your feed",
-                             "Very close to the look in your reference photos — fits your feed",
-                             "Matches the lighting and vibe of your reference photos",
-                             "Strong style match — this feels like the rest of your content"]
+                            "Very close to the style of your reference photos — fits your feed",
+                            "Matches the lighting and vibe of your reference photos",
+                            "Strong style match — this feels like the rest of your content"]
                 midPool  = ["Fits the aesthetic and vibe of your reference photos",
                              "Aligns with your reference photo style",
                              "Style is consistent with your reference photos"]
@@ -2146,8 +2168,8 @@ class BatchProcessor {
                              "Consistent look with your professional references"]
             case BatchPurpose.dating.rawValue:
                 highPool = ["Fits your dating profile style — consistent look across your photos",
-                             "Strong match to your reference photo style",
-                             "Looks consistent with your reference photos — cohesive profile"]
+                            "Strong style match to your reference photos",
+                            "Looks consistent with your reference photos — cohesive profile"]
                 midPool  = ["Aligns with your reference photo style",
                              "Style matches your reference photos reasonably well",
                              "Reference photos influenced this pick — style aligns"]
@@ -2160,7 +2182,7 @@ class BatchProcessor {
                                  "Good reference match — style is consistent",
                                  "Reference photos point to this one — solid alignment"]
                 } else {
-                    highPool = ["Very close to your reference photos — strong style match",
+                    highPool = ["Very close to your reference style — strong visual match",
                                  "Strong match to the look in your reference photos",
                                  "Reference photos clearly influenced this pick — high similarity"]
                     midPool  = ["Aligns well with your reference style",

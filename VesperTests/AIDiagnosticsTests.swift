@@ -57,6 +57,39 @@ final class AIDiagnosticsTests: XCTestCase {
         XCTAssertTrue(issues.contains { $0.id == "noDeletes" })
     }
 
+    func test_issuesSeparateReferenceStyleFromIdentityMatch() {
+        var result = makeResult()
+        result.hasFace = true
+        result.referenceScore = 0.72
+        result.userFaceIdentified = false
+        result.userFaceMatchConfidence = 0
+
+        let photos = AIDiagnosticAnalyzer.allPhotos(
+            topPicks: [result],
+            runnerUps: [],
+            deleteCandidates: [],
+            similars: [],
+            ratings: [:]
+        )
+        let issues = AIDiagnosticAnalyzer.issues(for: photos)
+
+        XCTAssertTrue(issues.contains { $0.id == "styleWithoutIdentity" })
+    }
+
+    func test_issuesExplainOneSidedFeedbackNeedsContrast() {
+        let result = makeResult()
+        let photos = AIDiagnosticAnalyzer.allPhotos(
+            topPicks: [result],
+            runnerUps: [],
+            deleteCandidates: [],
+            similars: [],
+            ratings: [result.id: 5]
+        )
+        let issues = AIDiagnosticAnalyzer.issues(for: photos)
+
+        XCTAssertTrue(issues.contains { $0.id == "oneSidedFeedback" })
+    }
+
     private func makeResult(compositeScore: Float = 0.6) -> PhotoResult {
         var result = PhotoResult(image: .test(), reasoning: "Test reasoning")
         result.compositeScore = compositeScore

@@ -56,6 +56,37 @@ final class NearDuplicateTests: XCTestCase {
             "Distinct photos should both appear")
     }
 
+    func test_moderatelySimilarSameLocationFramesAreNotOneDuplicateCluster() {
+        let emb1: [Float] = [1, 0, 0, 0]
+        let emb2 = vectorWithCosineSimilarity(0.82)
+
+        let a = PhotoScore.make(
+            qualityScore: 0.70,
+            hasFace: true,
+            faceYaw: 0.05,
+            compositionScore: 0.70,
+            clipEmbedding: emb1,
+            originalIndex: 0
+        )
+        let b = PhotoScore.make(
+            qualityScore: 0.62,
+            hasFace: true,
+            faceYaw: 0.10,
+            compositionScore: 0.68,
+            clipEmbedding: emb2,
+            originalIndex: 1
+        )
+
+        let result = processor.suppressNearDuplicates(
+            [a, b],
+            category: .vacation, isPromptMode: false,
+            dynamicRefWeight: 0, wantsLookingAway: false, wantsLookingAtCamera: false, hasFeedback: false
+        )
+
+        XCTAssertEqual(result.filter(\.isSimilar).count, 0,
+            "Moderate same-location similarity should not collapse into one similar-photo cluster")
+    }
+
     func test_burstOf4_onlyBestRanksFirst() {
         // Simulate 4 burst frames with the same embedding
         let burstEmb = randomUnitVector(dim: 16, seed: 5)
@@ -143,4 +174,10 @@ final class NearDuplicateTests: XCTestCase {
         // Duplicates still in tail
         XCTAssertEqual(result.count, 4)
     }
+}
+
+private func vectorWithCosineSimilarity(_ similarity: Float) -> [Float] {
+    let clamped = min(max(similarity, -1), 1)
+    let y = sqrt(max(0, 1 - clamped * clamped))
+    return [clamped, y, 0, 0]
 }
