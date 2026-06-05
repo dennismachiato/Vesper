@@ -50,6 +50,9 @@ struct ResultsView: View {
     @State private var isSyncingRatingAlbums = false
     @State private var hasDeferredRerank = false
     @State private var sessionFeedback: [UUID: GalleryView.FeedbackState] = [:]
+    #if DEBUG
+    @State private var showAIDiagnostics = false
+    #endif
     @Environment(\.modelContext) private var modelContext
     @State private var showDeleteAllConfirm = false
     @State private var showPhotoLibraryAccessAlert = false
@@ -133,6 +136,21 @@ struct ResultsView: View {
                                 .foregroundStyle(.white.opacity(0.4))
                         }
                         Spacer()
+                        #if DEBUG
+                        Button {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            showAIDiagnostics = true
+                        } label: {
+                            Image(systemName: "waveform.path.ecg.rectangle")
+                                .font(.caption.bold())
+                                .foregroundStyle(Color.vesperAccent)
+                                .frame(width: 32, height: 32)
+                                .background(Color.vesperAccent.opacity(0.12))
+                                .clipShape(Circle())
+                                .overlay(Circle().stroke(Color.vesperAccent.opacity(0.20), lineWidth: 1))
+                        }
+                        .accessibilityLabel("Open AI diagnostics")
+                        #endif
                         Button {
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()
                             saveTopPicksToAlbum()
@@ -715,6 +733,17 @@ struct ResultsView: View {
         } message: {
             Text("Some photos are missing their Photos library identifier, so Vesper cannot delete them from your iPhone.")
         }
+        #if DEBUG
+        .sheet(isPresented: $showAIDiagnostics) {
+            AIDiagnosticsView(
+                topPicks: topPicks,
+                runnerUps: runnerUps,
+                deleteCandidates: deleteCandidates,
+                similars: similars,
+                ratings: Dictionary(uniqueKeysWithValues: sessionFeedback.map { ($0.key, $0.value.starRating) })
+            )
+        }
+        #endif
         .fullScreenCover(isPresented: Binding(
             get: { galleryStartIndex != nil },
             set: { if !$0 { dismissGallery() } }

@@ -18,6 +18,7 @@ struct PhotoResult: Identifiable {
     var compositionScore: Float = 0.5
     var genuineSmileScore: Float = 0.5
     var hasFace: Bool = false
+    var faceCount: Int = 0
     var eyeState: EyeState = .unknown
     var eyeOpenConfidence: Float = 0.5
     var eyeSymmetryScore: Float = 0.75
@@ -945,6 +946,7 @@ class BatchProcessor {
                 compositionScore: score.compositionScore,
                 genuineSmileScore: score.genuineSmileScore,
                 hasFace: score.hasFace,
+                faceCount: score.faceCount,
                 eyeState: score.eyeState,
                 eyeOpenConfidence: score.eyeOpenConfidence,
                 eyeSymmetryScore: score.eyeSymmetryScore,
