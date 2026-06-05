@@ -96,7 +96,7 @@ final class EyeAspectRatioTests: XCTestCase {
         // Side-profile faces have foreshortened eye geometry — EAR is meaningless.
         // Both eyes reading 0.22 (clearly open in flat EAR terms) must still be `.unknown`
         // when yaw is past ~29°, because we can't actually see both eyes.
-        let (state, _) = VisionAnalyzer.eyeStateFromEARs(
+        let (state, _, _, _) = VisionAnalyzer.eyeStateFromEARs(
             leftEAR: 0.22, rightEAR: 0.22, faceYaw: 0.8, faceConfidence: 1.0
         )
         XCTAssertEqual(state, .unknown, "High-yaw face should bail to .unknown regardless of EAR")
@@ -105,7 +105,7 @@ final class EyeAspectRatioTests: XCTestCase {
     func test_eyeState_unknown_onLowFaceConfidence() {
         // Tinted sunglasses / heavy occlusion depresses Vision's per-face confidence.
         // Even if landmarks happen to produce a plausible EAR, we don't trust it.
-        let (state, _) = VisionAnalyzer.eyeStateFromEARs(
+        let (state, _, _, _) = VisionAnalyzer.eyeStateFromEARs(
             leftEAR: 0.22, rightEAR: 0.22, faceYaw: 0.0, faceConfidence: 0.4
         )
         XCTAssertEqual(state, .unknown, "Low face confidence should force .unknown")
@@ -113,7 +113,7 @@ final class EyeAspectRatioTests: XCTestCase {
 
     func test_eyeState_unknown_onMissingLandmarks() {
         // No eye landmarks at all (heavy occlusion, bad detection) → can't claim anything.
-        let (state, _) = VisionAnalyzer.eyeStateFromEARs(
+        let (state, _, _, _) = VisionAnalyzer.eyeStateFromEARs(
             leftEAR: nil, rightEAR: nil, faceYaw: 0.0, faceConfidence: 1.0
         )
         XCTAssertEqual(state, .unknown)
@@ -123,7 +123,7 @@ final class EyeAspectRatioTests: XCTestCase {
         // A wink, uneven squint, eyelash/glasses occlusion, or bad landmark pass can make
         // one eye contour collapse while the other eye is clearly open. That is not enough
         // evidence to label the user's photo as "Eyes closed."
-        let (state, _) = VisionAnalyzer.eyeStateFromEARs(
+        let (state, _, _, _) = VisionAnalyzer.eyeStateFromEARs(
             leftEAR: 0.04, rightEAR: 0.26, faceYaw: 0.0, faceConfidence: 1.0
         )
         XCTAssertEqual(state, .unknown, "One collapsed eye next to one open eye should stay .unknown, not .closed")
@@ -132,7 +132,7 @@ final class EyeAspectRatioTests: XCTestCase {
     func test_eyeState_unknown_onAsymmetryInOpenZone() {
         // Both eyes open but very asymmetric readings — usually a bad landmark pass
         // rather than a real expression. Refuse to make a claim either way.
-        let (state, _) = VisionAnalyzer.eyeStateFromEARs(
+        let (state, _, _, _) = VisionAnalyzer.eyeStateFromEARs(
             leftEAR: 0.18, rightEAR: 0.32, faceYaw: 0.0, faceConfidence: 1.0
         )
         XCTAssertEqual(state, .unknown, "Wide asymmetry without a clearly-closed side → .unknown")
@@ -140,7 +140,7 @@ final class EyeAspectRatioTests: XCTestCase {
 
     func test_eyeState_open_onSymmetricClearEyes() {
         // The happy path: both eyes clearly open, symmetric, straight-on face.
-        let (state, conf) = VisionAnalyzer.eyeStateFromEARs(
+        let (state, conf, _, _) = VisionAnalyzer.eyeStateFromEARs(
             leftEAR: 0.26, rightEAR: 0.26, faceYaw: 0.0, faceConfidence: 1.0
         )
         XCTAssertEqual(state, .open)
@@ -148,7 +148,7 @@ final class EyeAspectRatioTests: XCTestCase {
     }
 
     func test_eyeState_closed_onBothEyesShut() {
-        let (state, conf) = VisionAnalyzer.eyeStateFromEARs(
+        let (state, conf, _, _) = VisionAnalyzer.eyeStateFromEARs(
             leftEAR: 0.05, rightEAR: 0.06, faceYaw: 0.0, faceConfidence: 1.0
         )
         XCTAssertEqual(state, .closed)
@@ -156,7 +156,7 @@ final class EyeAspectRatioTests: XCTestCase {
     }
 
     func test_eyeState_unknown_whenOnlyOneEyeLooksClosed() {
-        let (state, _) = VisionAnalyzer.eyeStateFromEARs(
+        let (state, _, _, _) = VisionAnalyzer.eyeStateFromEARs(
             leftEAR: 0.05, rightEAR: nil, faceYaw: 0.0, faceConfidence: 1.0
         )
         XCTAssertEqual(state, .unknown,
@@ -164,7 +164,7 @@ final class EyeAspectRatioTests: XCTestCase {
     }
 
     func test_eyeState_unknown_whenClosedGeometryHasSoftFaceConfidence() {
-        let (state, _) = VisionAnalyzer.eyeStateFromEARs(
+        let (state, _, _, _) = VisionAnalyzer.eyeStateFromEARs(
             leftEAR: 0.05, rightEAR: 0.06, faceYaw: 0.0, faceConfidence: 0.65
         )
         XCTAssertEqual(state, .unknown,
@@ -172,7 +172,7 @@ final class EyeAspectRatioTests: XCTestCase {
     }
 
     func test_eyeState_unknown_onTinyFace() {
-        let (state, _) = VisionAnalyzer.eyeStateFromEARs(
+        let (state, _, _, _) = VisionAnalyzer.eyeStateFromEARs(
             leftEAR: 0.05, rightEAR: 0.06, faceYaw: 0.0, faceConfidence: 1.0,
             faceWidth: 0.04, faceHeight: 0.05
         )
@@ -180,10 +180,42 @@ final class EyeAspectRatioTests: XCTestCase {
             "Tiny faces do not have enough landmark detail for a closed-eye label")
     }
 
+    func test_eyeSignalMetrics_marksMissingEyesAsOccluded() {
+        let metrics = VisionAnalyzer.eyeSignalMetrics(
+            leftEAR: nil, rightEAR: nil, faceYaw: 0.0, faceConfidence: 0.92
+        )
+
+        XCTAssertLessThan(metrics.symmetry, 0.60)
+        XCTAssertGreaterThan(metrics.occlusion, 0.80,
+            "Missing eye landmarks should read as obscured, not as closed")
+    }
+
+    func test_eyeSignalMetrics_marksAsymmetryWithoutCallingItClosed() {
+        let (state, _, symmetry, occlusion) = VisionAnalyzer.eyeStateFromEARs(
+            leftEAR: 0.06, rightEAR: 0.28, faceYaw: 0.0, faceConfidence: 0.95
+        )
+
+        XCTAssertEqual(state, .unknown)
+        XCTAssertLessThan(symmetry, 0.40)
+        XCTAssertGreaterThan(occlusion, 0.50,
+            "One collapsed eye next to one open eye should be treated as unreliable/obscured")
+    }
+
+    func test_eyeSignalMetrics_trueClosedEyesAreNotTreatedAsSunglasses() {
+        let (state, _, symmetry, occlusion) = VisionAnalyzer.eyeStateFromEARs(
+            leftEAR: 0.05, rightEAR: 0.06, faceYaw: 0.0, faceConfidence: 0.95
+        )
+
+        XCTAssertEqual(state, .closed)
+        XCTAssertGreaterThan(symmetry, 0.90)
+        XCTAssertLessThan(occlusion, 0.30,
+            "Two consistently low EARs are a blink/closed-eye signal, not an occlusion signal")
+    }
+
     func test_eyeState_unknown_inSquintZone() {
         // EARs in the ambiguous 0.12–0.20 band — could be a natural narrow eye, could be
         // a squint, could be partially closed. We stay silent rather than guess.
-        let (state, _) = VisionAnalyzer.eyeStateFromEARs(
+        let (state, _, _, _) = VisionAnalyzer.eyeStateFromEARs(
             leftEAR: 0.15, rightEAR: 0.15, faceYaw: 0.0, faceConfidence: 1.0
         )
         XCTAssertEqual(state, .unknown, "Squint-zone EAR should be .unknown — too ambiguous for a claim")
@@ -192,7 +224,7 @@ final class EyeAspectRatioTests: XCTestCase {
     func test_eyeState_usesMinNotAverage_forMildAsymmetry() {
         // Even small asymmetry within the "conservative" path uses the min — so a photo
         // where one eye is squinted shouldn't falsely register as fully open.
-        let (state, _) = VisionAnalyzer.eyeStateFromEARs(
+        let (state, _, _, _) = VisionAnalyzer.eyeStateFromEARs(
             leftEAR: 0.15, rightEAR: 0.24, faceYaw: 0.0, faceConfidence: 1.0
         )
         XCTAssertEqual(state, .unknown,

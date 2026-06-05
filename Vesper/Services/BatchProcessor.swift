@@ -20,6 +20,8 @@ struct PhotoResult: Identifiable {
     var hasFace: Bool = false
     var eyeState: EyeState = .unknown
     var eyeOpenConfidence: Float = 0.5
+    var eyeSymmetryScore: Float = 0.75
+    var eyeOcclusionScore: Float = 0.0
     var faceYaw: Float = 0
     var colorHarmonyScore: Float = 0.5
     var userFaceIdentified: Bool = false
@@ -34,6 +36,9 @@ struct PhotoResult: Identifiable {
     /// Rank-normalized composite score (0–1). Stretched across the batch so scores feel
     /// meaningfully spread — top photo ≈ 0.92, last photo ≈ 0.30 even when raw scores cluster.
     var compositeScore: Float = 0
+    /// Within similar photos, how this frame compares against its closest alternatives.
+    var batchRelativeScore: Float = 0.5
+    var batchComparisonNote: String = ""
 }
 
 /// Counting semaphore for Swift structured concurrency.
@@ -107,6 +112,43 @@ class BatchProcessor {
         return avg.map { $0 / mag }   // unit vector — ready for cosine similarity
     }()
 
+    private lazy var eyeOcclusionEmbedding: [Float]? = {
+        let phrases = [
+            "person wearing sunglasses",
+            "eyes hidden by sunglasses",
+            "eyes obscured by dark glasses",
+            "face with eyes hidden in shadow",
+            "portrait with hair covering eyes"
+        ]
+        return Self.centroidEmbedding(for: phrases)
+    }()
+
+    private lazy var closedEyeEmbedding: [Float]? = {
+        let phrases = [
+            "person blinking in photo",
+            "eyes closed portrait",
+            "closed eyes selfie",
+            "mid blink portrait",
+            "person with eyes shut"
+        ]
+        return Self.centroidEmbedding(for: phrases)
+    }()
+
+    private static func centroidEmbedding(for phrases: [String]) -> [Float]? {
+        let embeddings = phrases.compactMap { CLIPTextEmbedder.shared?.embed(prompt: $0) }
+        guard !embeddings.isEmpty else { return nil }
+        let dim = embeddings[0].count
+        var avg = [Float](repeating: 0, count: dim)
+        for emb in embeddings {
+            for i in 0..<dim { avg[i] += emb[i] }
+        }
+        let n = Float(embeddings.count)
+        avg = avg.map { $0 / n }
+        let mag = sqrt(avg.map { $0 * $0 }.reduce(0, +))
+        guard mag > 0 else { return avg }
+        return avg.map { $0 / mag }
+    }
+
     // MARK: - Entry point (images already loaded by ProcessingView)
 
     // All prompt-derived intent flags, computed once and reused throughout the pipeline.
@@ -170,6 +212,10 @@ class BatchProcessor {
             (["closed eyes", "eyes closed", "eyes are closed", "eyes were closed",
               "eyes shut", "eyes are shut", "blink", "blinking", "half closed",
               "squinting", "looks tired", "tired eyes", "sleepy"], "eyeOpenConfidence", 1.40),
+            (["uneven eyes", "one eye", "one eye closed", "asymmetric eyes", "eye asymmetry",
+              "different size eyes", "one eye smaller", "lazy eye", "weird eye"], "eyeSymmetryScore", 1.30),
+            (["sunglasses", "glasses", "shades", "eyes hidden", "eyes covered",
+              "cant see eyes", "can't see eyes"], "eyeOcclusionScore", 1.25),
             (["eyes", "eye"], "eyeOpenConfidence", 1.25),
             // Smile / expression
             (["smile", "expression", "weird face", "bad expression", "not smiling",
@@ -177,6 +223,10 @@ class BatchProcessor {
             // Pose
             (["pose", "awkward", "bad pose", "standing weird", "posture", "slouching",
               "weird angle", "unflattering"], "poseScore", 1.20),
+            // Personal appearance comparisons — mapped to visible signals we can score today.
+            (["hair", "messy hair", "windy hair", "wind", "frizzy", "flyaway"], "aestheticScore", 1.12),
+            (["shirt", "outfit", "clothes", "clothing", "fit", "looks big",
+              "too baggy", "unflattering shirt"], "colorHarmonyScore", 1.12),
             // Color
             (["color", "colours", "colors", "bad color", "oversaturated", "washed",
               "dull colors", "too yellow", "too orange", "too blue", "color grading"], "colorHarmonyScore", 1.15),
@@ -512,6 +562,8 @@ class BatchProcessor {
         // Capturing them here as local constants makes them safe value-type copies for tasks.
         let precomputedNegativeEmbs = negativeEmbeddings
         let precomputedTrendEmb = trendEmbedding
+        let precomputedEyeOcclusionEmb = eyeOcclusionEmbedding
+        let precomputedClosedEyeEmb = closedEyeEmbedding
 
         // 2. Single-pass: Vision analysis + CLIP + category/aesthetic/reference scoring.
         // Bounded concurrency: at most 4 tasks run simultaneously. Without this cap all N tasks
@@ -574,6 +626,8 @@ class BatchProcessor {
                             let userFace = s.candidateFaces[match.index]
                             s.eyeState          = userFace.eyeState
                             s.eyeOpenConfidence = userFace.eyeOpenConfidence
+                            s.eyeSymmetryScore  = userFace.eyeSymmetryScore
+                            s.eyeOcclusionScore = userFace.eyeOcclusionScore
                             s.genuineSmileScore = userFace.genuineSmileScore
                             s.eyesOpen          = userFace.eyeState == .open
                             s.faceYaw           = userFace.faceYaw
@@ -630,6 +684,26 @@ class BatchProcessor {
                         s.trendScore = CLIPEmbedder.cosineSimilarity(imageEmb, trendEmb)
                     }
 
+                    if let imageEmb, let occlusionEmb = precomputedEyeOcclusionEmb {
+                        let occlusionSim = CLIPEmbedder.cosineSimilarity(imageEmb, occlusionEmb)
+                        let closedSim = precomputedClosedEyeEmb.map {
+                            CLIPEmbedder.cosineSimilarity(imageEmb, $0)
+                        } ?? 0
+                        let semanticOcclusion = max(0, min((occlusionSim - 0.19) / 0.12, 1))
+                        if semanticOcclusion > 0.25 {
+                            s.eyeOcclusionScore = max(s.eyeOcclusionScore, semanticOcclusion)
+                        }
+                        if s.hasFace,
+                           s.eyeState == .closed || s.eyeOpenConfidence < 0.40,
+                           occlusionSim > closedSim + 0.015,
+                           semanticOcclusion > 0.35 {
+                            s.eyeState = .unknown
+                            s.eyesOpen = false
+                            s.eyeOpenConfidence = max(s.eyeOpenConfidence, 0.5)
+                            s.eyeOcclusionScore = max(s.eyeOcclusionScore, 0.75)
+                        }
+                    }
+
                     if hasFeedback, let imageEmb {
                         var feedbackScore: Float = 0.5
 
@@ -681,6 +755,10 @@ class BatchProcessor {
             }
             return results.sorted { $0.0 < $1.0 }.map { $0.1 }
         }
+
+        // 5.5. Compare visually similar shots before deduping. This lets Vesper learn the
+        // "same moment, better frame" idea: cleaner expression/angle/outfit/color wins.
+        applyBatchRelativeSignals(to: &scores)
 
         // 6. Near-duplicate suppression
         // For each cluster of visually near-identical photos (cosine sim > 0.96),
@@ -869,6 +947,8 @@ class BatchProcessor {
                 hasFace: score.hasFace,
                 eyeState: score.eyeState,
                 eyeOpenConfidence: score.eyeOpenConfidence,
+                eyeSymmetryScore: score.eyeSymmetryScore,
+                eyeOcclusionScore: score.eyeOcclusionScore,
                 faceYaw: score.faceYaw,
                 colorHarmonyScore: score.colorHarmonyScore,
                 userFaceIdentified: score.userFaceIdentified,
@@ -882,6 +962,8 @@ class BatchProcessor {
                 isPromptMode: isPromptMode
             )
             result.compositeScore = normalizedComposite(for: score)
+            result.batchRelativeScore = score.batchRelativeScore
+            result.batchComparisonNote = score.batchComparisonNote
             return result
         }
 
@@ -891,6 +973,124 @@ class BatchProcessor {
             deleteScores.map  { makeResult($0) },
             similarScores.map { makeResult($0) }
         )
+    }
+
+    // MARK: - Batch-relative comparison
+
+    func applyBatchRelativeSignals(to scores: inout [PhotoScore]) {
+        guard scores.count > 1 else { return }
+
+        let clusters = similarPhotoClusters(scores, threshold: 0.82)
+        for cluster in clusters where cluster.count >= 2 {
+            let qualityValues = cluster.map { batchFrameQuality(scores[$0]) }
+            guard let maxQuality = qualityValues.max(),
+                  let minQuality = qualityValues.min(),
+                  maxQuality - minQuality > 0.02 else {
+                for index in cluster {
+                    scores[index].batchRelativeScore = 0.5
+                    scores[index].batchComparisonNote = ""
+                }
+                continue
+            }
+
+            for (offset, index) in cluster.enumerated() {
+                let value = qualityValues[offset]
+                let normalized = (value - minQuality) / (maxQuality - minQuality)
+                scores[index].batchRelativeScore = min(max(0.25 + normalized * 0.75, 0), 1)
+                if value >= maxQuality - 0.015 {
+                    scores[index].batchComparisonNote = "Best frame among similar shots"
+                } else if maxQuality - value > 0.12 {
+                    scores[index].batchComparisonNote = weakestSimilarFrameReason(scores[index])
+                } else {
+                    scores[index].batchComparisonNote = "A similar frame scored slightly cleaner"
+                }
+            }
+        }
+    }
+
+    private func similarPhotoClusters(_ scores: [PhotoScore], threshold: Float) -> [[Int]] {
+        var clusters: [[Int]] = []
+        var representatives: [(clusterIndex: Int, embedding: [Float])] = []
+
+        for index in scores.indices {
+            guard let embedding = scores[index].clipEmbedding else {
+                clusters.append([index])
+                continue
+            }
+
+            var assigned = false
+            for rep in representatives {
+                if CLIPEmbedder.cosineSimilarity(embedding, rep.embedding) >= threshold {
+                    clusters[rep.clusterIndex].append(index)
+                    assigned = true
+                    break
+                }
+            }
+
+            if !assigned {
+                clusters.append([index])
+                representatives.append((clusters.count - 1, embedding))
+            }
+        }
+        return clusters
+    }
+
+    private func batchFrameQuality(_ score: PhotoScore) -> Float {
+        var expression = score.genuineSmileScore
+        if score.eyeState == .closed {
+            expression = max(expression * 0.85, closedEyeContextScore(score))
+        }
+        let eyeReliability: Float
+        if score.hasFace {
+            eyeReliability = score.eyeState == .unknown
+                ? 0.58 - score.eyeOcclusionScore * 0.08
+                : 0.35 + score.eyeOpenConfidence * 0.45 + score.eyeSymmetryScore * 0.20
+        } else {
+            eyeReliability = 0.5
+        }
+
+        let userMatch = score.userFaceIdentified
+            ? 0.55 + score.userFaceMatchConfidence * 0.45
+            : 0.5
+
+        let raw = (score.qualityScore * 0.20)
+                + (score.exposureScore * 0.10)
+                + (score.compositionScore * 0.13)
+                + (score.poseScore * 0.12)
+                + (expression * 0.13)
+                + (eyeReliability * 0.13)
+                + (score.colorHarmonyScore * 0.08)
+                + ((score.referenceScore ?? 0.5) * 0.06)
+                + (score.vibeScore * 0.03)
+                + (userMatch * 0.02)
+        return min(max(raw, 0), 1)
+    }
+
+    private func weakestSimilarFrameReason(_ score: PhotoScore) -> String {
+        if score.hasFace {
+            if score.eyeState == .closed {
+                return "A similar frame has cleaner eye expression"
+            }
+            if score.eyeSymmetryScore < 0.55 {
+                return "A similar frame has more balanced eyes"
+            }
+            if score.poseScore < 0.40 || score.faceYaw > 0.55 {
+                return "A similar frame has a more flattering angle"
+            }
+            if score.genuineSmileScore < 0.35 {
+                return "A similar frame has a stronger expression"
+            }
+        }
+        if score.qualityScore < 0.45 {
+            return "A similar frame is sharper"
+        }
+        if score.exposureScore < 0.45 {
+            return "A similar frame has better lighting"
+        }
+        if score.colorHarmonyScore < 0.45 {
+            return "A similar frame has cleaner color and outfit balance"
+        }
+        return "A similar frame scored cleaner overall"
     }
 
     // MARK: - Near-duplicate suppression
@@ -1355,6 +1555,9 @@ class BatchProcessor {
                 let relief = closedEyePenaltyRelief(for: score, tolerance: closedEyeTolerance)
                 weakness += (0.35 - score.eyeOpenConfidence) * 1.4 * (1.0 - relief)
             }
+            if score.eyeOcclusionScore < 0.45 && score.eyeSymmetryScore < 0.50 {
+                weakness += (0.50 - score.eyeSymmetryScore) * 0.45
+            }
             if score.poseScore < 0.32 {
                 weakness += (0.32 - score.poseScore) * 1.1
             }
@@ -1445,6 +1648,11 @@ class BatchProcessor {
             ? 1.0 + (score.subjectHeight - 0.5) * 0.40
             : 1.0
 
+        // Similar-frame comparison: if two photos are from the same moment, the model now
+        // prefers the one with cleaner expression/angle/light instead of scoring each frame in
+        // isolation. Neutral default is 0.5 → ×1.0.
+        let batchRelativeBonus: Float = 0.94 + score.batchRelativeScore * 0.12
+
         // In prompt mode for non-face content (food, animals, landscapes, etc.), any person
         // incidentally in frame shouldn't trigger eye/gaze penalties — those signals are
         // irrelevant when the user asked for "best food photos" or "nature shots".
@@ -1462,6 +1670,16 @@ class BatchProcessor {
             yawBonus = min(max(1.08 - delta * 0.16, 0.92), 1.08)
         } else {
             yawBonus = 1.0
+        }
+
+        let eyeSymmetryMultiplier: Float
+        if score.hasFace && applyFacePenalties && !wantsEyesClosed {
+            let visibleReliability = 1.0 - min(max(score.eyeOcclusionScore, 0), 1)
+            let learnedSensitivity = dimMult("eyeSymmetryScore")
+            let penalty = (1.0 - min(max(score.eyeSymmetryScore, 0), 1)) * 0.12 * visibleReliability * learnedSensitivity
+            eyeSymmetryMultiplier = max(1.0 - penalty, 0.84)
+        } else {
+            eyeSymmetryMultiplier = 1.0
         }
 
         // Gaze multiplier — only meaningful when face content is the subject
@@ -1490,13 +1708,13 @@ class BatchProcessor {
         if wantsEyesClosed {
             // User wants closed eyes — flip: closed eyes score higher
             if score.eyeState == .unknown {
-                eyePenalty = 0.92
+                eyePenalty = score.eyeOcclusionScore > 0.55 ? 0.96 : 0.92
             } else {
                 eyePenalty = 0.4 + (1.0 - score.eyeOpenConfidence) * 0.6
             }
         } else if score.hasFace && applyFacePenalties {
             if score.eyeState == .unknown {
-                eyePenalty = 0.92
+                eyePenalty = score.eyeOcclusionScore > 0.55 ? 0.96 : 0.92
             } else {
                 let base = 0.55 + score.eyeOpenConfidence * 0.45
                 let relief = score.eyeState == .closed
@@ -1632,6 +1850,7 @@ class BatchProcessor {
             let datingRaw = min(base * soloBonus * datingSmile * datingEyeContact * datingPose * datingFaceSizeBonus, 1.0)
                 * eyePenalty * feedbackBoost * negativePenalty * (exposureMult * learnedExposureMult)
                 * vibeBonus * trendBonus * subjectHeightBonus * yawBonus
+                * eyeSymmetryMultiplier * batchRelativeBonus
             return min(max(datingRaw.isFinite ? datingRaw : 0.0, 0.0), 1.0)
         }
 
@@ -1683,6 +1902,7 @@ class BatchProcessor {
             let promptRaw = base * eyePenalty * gazeMultiplier * feedbackBoost * negativePenalty
                 * (exposureMult * learnedExposureMult) * promptPoseMult * promptSmileMult
                 * vibeBonus * trendBonus * subjectHeightBonus * yawBonus
+                * eyeSymmetryMultiplier * batchRelativeBonus
             return min(max(promptRaw.isFinite ? promptRaw : 0.0, 0.0), 1.0)
         }
 
@@ -1783,6 +2003,7 @@ class BatchProcessor {
                * eyePenalty * gazeMultiplier * feedbackBoost * negativePenalty
                * (exposureMult * learnedExposureMult)
                * vibeBonus * trendBonus * subjectHeightBonus * yawBonus
+               * eyeSymmetryMultiplier * batchRelativeBonus
         // NaN/Inf guard: if any component produced NaN (e.g. division by zero in normalization),
         // return 0.0 so the sort doesn't crash or randomize results.
         return min(max(combined.isFinite ? combined : 0.0, 0.0), 1.0)
@@ -1830,8 +2051,17 @@ class BatchProcessor {
                 } else if score.eyeState == .closed {
                     sigs.append(RUSignal(text: pick(["Eyes may be closed or mid-blink", "Blink or squint hurt the score", "Eyes partly closed — didn't make top picks"], for: score), weight: 0.2))
                 } else if score.eyeState == .unknown {
-                    sigs.append(RUSignal(text: "Eye state uncertain — worth checking manually", weight: 0.18))
+                    let text = score.eyeOcclusionScore > 0.55
+                        ? "Eyes are obscured — likely glasses, shadow, or angle"
+                        : "Eye state uncertain — worth checking manually"
+                    sigs.append(RUSignal(text: text, weight: 0.18))
                 }
+            }
+
+            if score.batchRelativeScore < 0.45, !score.batchComparisonNote.isEmpty {
+                sigs.append(RUSignal(text: score.batchComparisonNote, weight: 0.22))
+            } else if score.batchRelativeScore > 0.78 {
+                sigs.append(RUSignal(text: "Strongest frame among similar shots", weight: 0.30))
             }
 
             // Reference / prompt match
@@ -2179,6 +2409,15 @@ class BatchProcessor {
         }
 
         // ── Multiplier bonuses (face-related — appended after primary signals) ──
+        if score.batchRelativeScore > 0.78 {
+            add(pick(["Best frame among similar shots",
+                       "Cleaner than the nearby similar frames",
+                       "Strongest option from this moment"], for: score),
+                contribution: 0.16)
+        } else if score.batchRelativeScore < 0.42, !score.batchComparisonNote.isEmpty {
+            add(score.batchComparisonNote, contribution: 0.055)
+        }
+
         // Bokeh
         if score.hasFace {
             let separation = score.qualityScore - score.backgroundSharpness
@@ -2250,6 +2489,12 @@ class BatchProcessor {
         // Eye state — only claim when analyser returned a definite, confident verdict.
         // .unknown (sunglasses, squint, extreme profile) stays silent.
         if score.hasFace {
+            if score.eyeOcclusionScore < 0.45 && score.eyeSymmetryScore < 0.55 {
+                add(pick(["A more balanced eye expression would score higher",
+                           "Eye expression is a little uneven compared with similar frames",
+                           "One eye reads less cleanly than the other"], for: score),
+                    contribution: 0.065)
+            }
             if wantsEyesClosed {
                 if score.eyeState == .closed, score.eyeOpenConfidence < 0.30 {
                     add(pick(["Eyes softly closed — dreamy look achieved",
@@ -2278,9 +2523,14 @@ class BatchProcessor {
                             contribution: 0.05)
                     }
                 case .unknown:
-                    add(pick(["Eye state uncertain — face angle or lighting limits confidence",
-                               "Eye visibility is uncertain — worth checking manually",
-                               "Eyes are hard to read here — use your judgment"], for: score),
+                    let pool = score.eyeOcclusionScore > 0.55
+                        ? ["Eyes look obscured rather than confidently closed",
+                           "Eye detail is hidden by glasses, shadow, or angle",
+                           "Eyes are hard to judge here, likely from obstruction"]
+                        : ["Eye state uncertain — face angle or lighting limits confidence",
+                           "Eye visibility is uncertain — worth checking manually",
+                           "Eyes are hard to read here — use your judgment"]
+                    add(pick(pool, for: score),
                         contribution: 0.035)
                 default:
                     break

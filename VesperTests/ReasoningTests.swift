@@ -93,6 +93,35 @@ final class ReasoningTests: XCTestCase {
         }
     }
 
+    func test_obscuredUnknownEyes_getObscuredReasoning() {
+        let s = PhotoScore.make(
+            hasFace: true,
+            eyeOpenConfidence: 0.50,
+            eyeState: .unknown,
+            eyeOcclusionScore: 0.85
+        )
+        let r = reason(s)
+
+        XCTAssertFalse(r.contains("Eyes appear closed"), "Obscured eyes should not be described as closed; got: \(r)")
+        XCTAssertTrue(r.contains("obscured") || r.contains("hidden") || r.contains("hard to judge"),
+            "Reasoning should explain obstruction/visibility instead of a blink; got: \(r)")
+    }
+
+    func test_batchRelativeReasoningSurfacesSimilarFrameWinner() {
+        let s = PhotoScore.make(
+            qualityScore: 0.72,
+            hasFace: true,
+            eyeOpenConfidence: 0.82,
+            categoryScore: 0.65,
+            aestheticScore: 0.65,
+            batchRelativeScore: 0.95
+        )
+        let r = reason(s)
+
+        XCTAssertTrue(r.contains("similar") || r.contains("moment"),
+            "Reasoning should mention when a photo wins among similar frames; got: \(r)")
+    }
+
     func test_eyesOpenClaim_requiresOpenState_notJustConfidence() {
         // A .closed verdict with an inflated confidence (shouldn't happen in practice,
         // but the guard must still hold) must not produce an "Eyes open" claim.

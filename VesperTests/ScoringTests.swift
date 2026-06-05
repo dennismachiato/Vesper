@@ -176,6 +176,78 @@ final class ScoringTests: XCTestCase {
             "An explicit closed-eye dislike should still tighten the penalty")
     }
 
+    func test_obscuredEyesArePenalizedLessThanTrueClosedEyes() {
+        let sunglasses = PhotoScore.make(
+            qualityScore: 0.72,
+            hasFace: true,
+            eyeOpenConfidence: 0.5,
+            eyeState: .unknown,
+            eyeOcclusionScore: 0.85,
+            categoryScore: 0.65,
+            aestheticScore: 0.65
+        )
+        let closed = PhotoScore.make(
+            qualityScore: 0.72,
+            hasFace: true,
+            eyeOpenConfidence: 0.08,
+            eyeState: .closed,
+            eyeOcclusionScore: 0.05,
+            categoryScore: 0.65,
+            aestheticScore: 0.65
+        )
+
+        XCTAssertGreaterThan(score(sunglasses, category: .vacation), score(closed, category: .vacation),
+            "Sunglasses/obscured eyes should be treated as uncertainty, not as a confident blink")
+    }
+
+    func test_visibleEyeAsymmetryLowersScore() {
+        let balanced = PhotoScore.make(
+            qualityScore: 0.72,
+            hasFace: true,
+            eyeOpenConfidence: 0.86,
+            eyeState: .open,
+            eyeSymmetryScore: 0.95,
+            eyeOcclusionScore: 0.05,
+            categoryScore: 0.65,
+            aestheticScore: 0.65
+        )
+        let uneven = PhotoScore.make(
+            qualityScore: 0.72,
+            hasFace: true,
+            eyeOpenConfidence: 0.86,
+            eyeState: .open,
+            eyeSymmetryScore: 0.25,
+            eyeOcclusionScore: 0.05,
+            categoryScore: 0.65,
+            aestheticScore: 0.65
+        )
+
+        XCTAssertGreaterThan(score(balanced, category: .mugshot), score(uneven, category: .mugshot),
+            "When eyes are visible, strong left/right mismatch should lower the ranking")
+    }
+
+    func test_batchRelativeScoreNudgesSimilarFrameWinner() {
+        let winner = PhotoScore.make(
+            qualityScore: 0.65,
+            hasFace: true,
+            eyeOpenConfidence: 0.85,
+            categoryScore: 0.60,
+            aestheticScore: 0.60,
+            batchRelativeScore: 0.95
+        )
+        let weakerFrame = PhotoScore.make(
+            qualityScore: 0.65,
+            hasFace: true,
+            eyeOpenConfidence: 0.85,
+            categoryScore: 0.60,
+            aestheticScore: 0.60,
+            batchRelativeScore: 0.25
+        )
+
+        XCTAssertGreaterThan(score(winner, category: .vacation), score(weakerFrame, category: .vacation),
+            "The best frame from a similar-photo cluster should get a gentle ranking lift")
+    }
+
     func test_closedEyeTolerance_keepsStrongClosedEyePhotoOutOfDeleteCandidates() {
         var strongClosed = PhotoScore.make(
             qualityScore: 0.70,

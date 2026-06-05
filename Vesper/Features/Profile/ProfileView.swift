@@ -161,6 +161,7 @@ struct ProfileView: View {
         let closedEyeTolerance = BatchProcessor().learnedClosedEyeTolerance(from: Array(feedbackHistory))
         let selfFaces = highRated.filter(\.userFaceIdentified)
         let yaw = avg(selfFaces.map { abs($0.photoFaceYaw) })
+        let reasonText = rated.map(\.reason).joined(separator: " ").lowercased()
 
         var insights: [LearningInsight] = []
         if quality >= 0.68 {
@@ -184,6 +185,15 @@ struct ProfileView: View {
             insights.append(LearningInsight(icon: "eye.fill", title: "Clear eyes", detail: "Open, visible eyes are a positive signal in your ratings.", tint: .blue))
         } else if closedEyeTolerance > 0.12 {
             insights.append(LearningInsight(icon: "eye.slash.fill", title: "Intentional closed eyes", detail: "Closed-eye shots can rank well when expression and framing work.", tint: .purple))
+        }
+        if reasonText.contains("sunglasses") || reasonText.contains("glasses") || reasonText.contains("eyes hidden") {
+            insights.append(LearningInsight(icon: "sunglasses.fill", title: "Obscured eyes", detail: "Vesper treats hidden eyes as uncertain instead of assuming a blink.", tint: .teal))
+        }
+        if reasonText.contains("hair") || reasonText.contains("wind") {
+            insights.append(LearningInsight(icon: "wind", title: "Grooming details", detail: "Hair and wind notes are being used as soft style signals.", tint: .mint))
+        }
+        if reasonText.contains("outfit") || reasonText.contains("shirt") || reasonText.contains("clothes") {
+            insights.append(LearningInsight(icon: "tshirt.fill", title: "Outfit preference", detail: "Clothing feedback is nudging color, style, and outfit balance.", tint: .orange))
         }
         if selfFaces.count >= 5 {
             if yaw < 0.14 {

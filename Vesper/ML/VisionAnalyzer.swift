@@ -28,6 +28,8 @@ struct CandidateFaceData {
     let boundingBox: CGRect       // Vision normalised (y-up)
     let eyeState: EyeState
     let eyeOpenConfidence: Float
+    let eyeSymmetryScore: Float   // 1 = balanced/reliable, 0 = strongly uneven
+    let eyeOcclusionScore: Float  // 1 = eyes likely hidden by glasses, shadows, hair, or missing landmarks
     let genuineSmileScore: Float
     let faceYaw: Float
     let detectionConfidence: Float
@@ -45,6 +47,8 @@ struct PhotoScore {
     var eyeState: EyeState = .unknown    // canonical eye verdict — reasoning / scoring should check this first
     var eyesOpen: Bool = true            // legacy mirror of eyeState == .open; kept for existing call sites
     var eyeOpenConfidence: Float = 0.5   // 0 = definitely closed, 1 = definitely open; 0.5 = neutral/unknown
+    var eyeSymmetryScore: Float = 0.75    // 1 = balanced eyes; low = uneven squint/wink/landmark mismatch
+    var eyeOcclusionScore: Float = 0.0    // high when eyes are hidden/ambiguous rather than actually closed
     var faceYaw: Float = 0               // radians; ~0 = looking at camera, larger = away
     var faceBoundingBox: CGRect? = nil   // normalised Vision coordinates — used for subject-area sharpness
     var hasAnimal: Bool = false          // true when VNDetectAnimalBodyPoseRequest detects a dog/cat
@@ -62,6 +66,8 @@ struct PhotoScore {
     var feedbackScore: Float? = nil
     var clipEmbedding: [Float]? = nil   // cached for near-duplicate suppression
     var negativeScore: Float = 0.0      // max cosine similarity to "bad photo" descriptions — acts as penalty
+    var batchRelativeScore: Float = 0.5 // within similar shots: 1 = strongest frame, 0 = weaker alternate
+    var batchComparisonNote: String = ""
 
     /// Estimated normalised subject height (0 = no body / partial torso, 1 = full-body, head-to-toe).
     /// Derived from VNDetectHumanBodyPoseRequest keypoints (head→ankle vertical span).
@@ -129,6 +135,8 @@ class VisionAnalyzer {
         var eyeState: EyeState = .unknown
         var eyesOpen = true
         var eyeOpenConfidence: Float = 0.5
+        var eyeSymmetryScore: Float = 0.75
+        var eyeOcclusionScore: Float = 0.0
         var faceYaw: Float = 0
         var faceBoundingBox: CGRect? = nil
         var hasAnimal = false
@@ -191,6 +199,8 @@ class VisionAnalyzer {
                     let dominantVerdict = computeEyeState(from: dominant)
                     eyeState = dominantVerdict.state
                     eyeOpenConfidence = dominantVerdict.confidence
+                    eyeSymmetryScore = dominantVerdict.symmetry
+                    eyeOcclusionScore = dominantVerdict.occlusion
                     eyesOpen = eyeState == .open
 
                     // Still collect every significant face (>= 20% of the dominant face's area)
@@ -212,6 +222,8 @@ class VisionAnalyzer {
                                 boundingBox: face.boundingBox,
                                 eyeState: verdict.state,
                                 eyeOpenConfidence: verdict.confidence,
+                                eyeSymmetryScore: verdict.symmetry,
+                                eyeOcclusionScore: verdict.occlusion,
                                 genuineSmileScore: computeGenuineSmileScore(from: face),
                                 faceYaw: face.yaw.map { abs($0.floatValue) } ?? 0,
                                 detectionConfidence: Float(face.confidence),
@@ -286,6 +298,8 @@ class VisionAnalyzer {
             eyeState: eyeState,
             eyesOpen: eyesOpen,
             eyeOpenConfidence: eyeOpenConfidence,
+            eyeSymmetryScore: eyeSymmetryScore,
+            eyeOcclusionScore: eyeOcclusionScore,
             faceYaw: faceYaw,
             faceBoundingBox: faceBoundingBox,
             hasAnimal: hasAnimal,
@@ -396,7 +410,7 @@ class VisionAnalyzer {
     /// missing/too-few landmarks, or a wide left/right asymmetry that can't be disambiguated.
     /// Uses the **minimum** EAR across detected eyes so a wink or half-closed eye is never
     /// averaged into a spurious "eyes open" verdict.
-    func computeEyeState(from face: VNFaceObservation) -> (state: EyeState, confidence: Float) {
+    func computeEyeState(from face: VNFaceObservation) -> (state: EyeState, confidence: Float, symmetry: Float, occlusion: Float) {
         let yaw = face.yaw.map { abs($0.floatValue) }
         let leftEAR  = eyeAspectRatio(face.landmarks?.leftEye)
         let rightEAR = eyeAspectRatio(face.landmarks?.rightEye)
@@ -458,25 +472,34 @@ class VisionAnalyzer {
         faceConfidence: Float = 1.0,
         faceWidth: Float? = nil,
         faceHeight: Float? = nil
-    ) -> (state: EyeState, confidence: Float) {
+    ) -> (state: EyeState, confidence: Float, symmetry: Float, occlusion: Float) {
+        let metrics = eyeSignalMetrics(
+            leftEAR: leftEAR,
+            rightEAR: rightEAR,
+            faceYaw: faceYaw,
+            faceConfidence: faceConfidence,
+            faceWidth: faceWidth,
+            faceHeight: faceHeight
+        )
+
         // Guard: low face-detection quality. Vision tends to drop on faces with heavy tinted
         // sunglasses, strong hair occlusion, bad exposure, or noisy landmarks. False "closed"
         // labels are worse than uncertainty, so require a stronger face observation.
-        guard faceConfidence >= 0.70 else { return (.unknown, 0.5) }
+        guard faceConfidence >= 0.70 else { return (.unknown, 0.5, metrics.symmetry, metrics.occlusion) }
 
         // Guard: tiny faces don't have enough landmark detail to make an eye-state claim.
         if let faceWidth, let faceHeight, min(faceWidth, faceHeight) < 0.06 {
-            return (.unknown, 0.5)
+            return (.unknown, 0.5, metrics.symmetry, metrics.occlusion)
         }
 
         // Guard: extreme yaw. Beyond ~29° the visible eye's EAR is foreshortened and the
         // hidden eye's EAR is nonsense, so we refuse to claim either way.
         if let yaw = faceYaw, abs(yaw) > 0.50 {
-            return (.unknown, 0.5)
+            return (.unknown, 0.5, metrics.symmetry, metrics.occlusion)
         }
 
         let ears = [leftEAR, rightEAR].compactMap { $0 }
-        guard !ears.isEmpty else { return (.unknown, 0.5) }
+        guard !ears.isEmpty else { return (.unknown, 0.5, metrics.symmetry, metrics.occlusion) }
 
         let minEAR = ears.min()!
         let maxEAR = ears.max()!
@@ -486,24 +509,80 @@ class VisionAnalyzer {
         // A single visible eye can confirm an open-eye photo, but it cannot confidently prove the
         // user's eyes are closed. Missing one eye is usually profile, hair, glasses, or occlusion.
         if ears.count == 1 {
-            return minEAR >= 0.22 ? (.open, minConfidence) : (.unknown, minConfidence)
+            return minEAR >= 0.22
+                ? (.open, minConfidence, metrics.symmetry, metrics.occlusion)
+                : (.unknown, minConfidence, metrics.symmetry, metrics.occlusion)
         }
 
         // Strong asymmetry is not enough evidence for "eyes closed". It can be a wink, uneven
         // squint, glasses glare, eyelashes, or a bad landmark pass. Stay silent instead.
         if ears.count == 2 && asymmetry > 0.10 {
-            return (.unknown, minConfidence)
+            return (.unknown, minConfidence, metrics.symmetry, metrics.occlusion)
         }
 
         // Closed requires both eyes to be consistently low. This avoids punishing narrow eyes,
         // smiles, dark-scene landmark noise, or a single collapsed eye contour.
         if minEAR < 0.09 && maxEAR < 0.13 {
-            return (.closed, minConfidence)
+            return (.closed, minConfidence, metrics.symmetry, metrics.occlusion)
         }
         if minEAR < 0.20 {
-            return (.unknown, minConfidence)
+            return (.unknown, minConfidence, metrics.symmetry, metrics.occlusion)
         }
-        return (.open, minConfidence)
+        return (.open, minConfidence, metrics.symmetry, metrics.occlusion)
+    }
+
+    /// Pure quality metrics for eye landmarks, exposed for tests and for downstream scoring.
+    /// `symmetry` catches mismatched eye readings; `occlusion` distinguishes hidden eyes from
+    /// confidently closed eyes so sunglasses do not train the model as blinks.
+    static func eyeSignalMetrics(
+        leftEAR: Float?,
+        rightEAR: Float?,
+        faceYaw: Float?,
+        faceConfidence: Float = 1.0,
+        faceWidth: Float? = nil,
+        faceHeight: Float? = nil
+    ) -> (symmetry: Float, occlusion: Float) {
+        let ears = [leftEAR, rightEAR].compactMap { $0 }
+        let yaw = abs(faceYaw ?? 0)
+
+        var occlusion: Float = 0.0
+        if faceConfidence < 0.70 {
+            occlusion = max(occlusion, 0.85)
+        } else if faceConfidence < 0.82 {
+            occlusion = max(occlusion, 0.45)
+        }
+        if let faceWidth, let faceHeight, min(faceWidth, faceHeight) < 0.06 {
+            occlusion = max(occlusion, 0.80)
+        }
+        if yaw > 0.50 {
+            occlusion = max(occlusion, 0.65)
+        } else if yaw > 0.35 {
+            occlusion = max(occlusion, 0.35)
+        }
+
+        switch ears.count {
+        case 0:
+            return (0.45, max(occlusion, 0.90))
+        case 1:
+            let oneEye = ears[0]
+            let singleEyeOcclusion: Float = oneEye < 0.20 ? 0.78 : 0.62
+            return (0.55, max(occlusion, singleEyeOcclusion))
+        default:
+            let minEAR = ears.min() ?? 0
+            let maxEAR = ears.max() ?? 0
+            let asymmetry = maxEAR - minEAR
+            let symmetry = 1.0 - min(max((asymmetry - 0.03) / 0.12, 0), 1)
+            if asymmetry > 0.10 {
+                occlusion = max(occlusion, 0.58)
+            } else if asymmetry > 0.07 {
+                occlusion = max(occlusion, 0.32)
+            }
+            // Two consistently low EARs are a true closed-eye signal, not occlusion.
+            if minEAR < 0.09 && maxEAR < 0.13 {
+                occlusion = min(occlusion, 0.25)
+            }
+            return (min(max(symmetry, 0), 1), min(max(occlusion, 0), 1))
+        }
     }
 
     /// Pure EAR → confidence mapping — exposed for unit testing.

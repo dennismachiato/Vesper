@@ -44,6 +44,8 @@ extension PhotoScore {
         eyesOpen: Bool = true,
         eyeOpenConfidence: Float = 0.8,
         eyeState: EyeState? = nil,
+        eyeSymmetryScore: Float = 0.75,
+        eyeOcclusionScore: Float = 0.0,
         faceYaw: Float = 0.0,
         exposureScore: Float = 0.5,
         compositionScore: Float = 0.5,
@@ -58,6 +60,7 @@ extension PhotoScore {
         vibeScore: Float = 0.5,
         trendScore: Float = 0.5,
         negativeScore: Float = 0.0,
+        batchRelativeScore: Float = 0.5,
         faceCount: Int = 0,
         userFaceIdentified: Bool = false,
         userFaceMatchConfidence: Float = 0,
@@ -74,6 +77,8 @@ extension PhotoScore {
         s.eyesOpen = eyesOpen
         s.eyeOpenConfidence = eyeOpenConfidence
         s.eyeState = eyeState ?? (eyeOpenConfidence >= 0.5 ? .open : .closed)
+        s.eyeSymmetryScore = eyeSymmetryScore
+        s.eyeOcclusionScore = eyeOcclusionScore
         s.faceYaw = faceYaw
         s.exposureScore = exposureScore
         s.compositionScore = compositionScore
@@ -88,6 +93,7 @@ extension PhotoScore {
         s.vibeScore = vibeScore
         s.trendScore = trendScore
         s.negativeScore = negativeScore
+        s.batchRelativeScore = batchRelativeScore
         s.faceCount = faceCount
         s.userFaceIdentified = userFaceIdentified
         s.userFaceMatchConfidence = userFaceMatchConfidence
