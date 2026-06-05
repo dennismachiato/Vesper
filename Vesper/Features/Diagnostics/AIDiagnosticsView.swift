@@ -15,7 +15,7 @@ enum AIDiagnosticPool: String, CaseIterable {
         switch self {
         case .topPicks: return "Top"
         case .runnerUps: return "Review"
-        case .deleteCandidates: return "Delete"
+        case .deleteCandidates: return "Cleanup"
         case .similars: return "Similar"
         }
     }
@@ -245,7 +245,7 @@ struct AIDiagnosticsView: View {
                 .padding(.vertical, 18)
             }
             .background(LinearGradient.vesperBg.ignoresSafeArea())
-            .navigationTitle("AI Diagnostics")
+            .navigationTitle("Why These Picks?")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {

@@ -75,8 +75,8 @@ struct HomeView: View {
                                     .font(.subheadline.bold())
                                     .foregroundStyle(.white)
                                 Text(referencePhotos.isEmpty
-                                     ? "Add reference photos to improve matching"
-                                     : "\(referencePhotos.count) reference photo\(referencePhotos.count == 1 ? "" : "s")")
+                                     ? "Add favorites to teach style and identity"
+                                     : "Used for style matching and face identity")
                                     .font(.caption)
                                     .foregroundStyle(.white.opacity(0.45))
                             }
@@ -145,9 +145,9 @@ struct HomeView: View {
                                     .foregroundStyle(.white)
 
                                 ForEach([
-                                    ("1", "photo.stack", "Pick 10–50 similar photos", "Burst shots, event photos, anything you want to sort through"),
-                                    ("2", "sparkles", "Vesper ranks them privately", "Scored by sharpness, faces, expression, and your style on-device"),
-                                    ("3", "star.circle", "Rate and sort the batch", "Use 1-5 stars to organize photos and teach Vesper your taste")
+                                    ("1", "photo.stack", "Pick a similar batch", "Burst shots, event photos, or anything you want to compare"),
+                                    ("2", "sparkles", "Vesper ranks privately", "Scored by sharpness, faces, expression, and your style on-device"),
+                                    ("3", "star.circle", "Rate to teach Vesper", "Stars tune future batches and can organize Photos albums")
                                 ], id: \.0) { _, icon, title, subtitle in
                                     HStack(alignment: .top, spacing: 12) {
                                         Image(systemName: icon)
@@ -203,7 +203,7 @@ struct HomeView: View {
                             HStack(spacing: 8) {
                                 Image(systemName: "sparkles.rectangle.stack")
                                     .font(.subheadline)
-                                Text("Full Library Cleanup")
+                                Text("Library Cleanup Review")
                                     .font(.subheadline.weight(.semibold))
                             }
                             .foregroundStyle(.white.opacity(0.7))
@@ -225,7 +225,7 @@ struct HomeView: View {
                             HStack(spacing: 8) {
                                 Image(systemName: "brain.head.profile")
                                     .font(.subheadline)
-                                Text("Test & Teach Vesper")
+                                Text("Teach Vesper Your Taste")
                                     .font(.subheadline.weight(.semibold))
                             }
                             .foregroundStyle(Color.vesperAccent.opacity(0.9))

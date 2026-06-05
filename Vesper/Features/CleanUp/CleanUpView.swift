@@ -60,7 +60,7 @@ struct CleanUpView: View {
             .padding(.top, 16)
         }
         .vesperBackground()
-        .navigationTitle("Clean Up")
+        .navigationTitle("Cleanup Review")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .navigationDestination(for: CleanUpCategory.self) { category in
@@ -89,11 +89,11 @@ struct CleanUpView: View {
                     .foregroundStyle(Color.vesperAccent)
             }
 
-            Text("Full Library Cleanup")
+            Text("Cleanup Review")
                 .font(.title2.bold())
                 .foregroundStyle(.white)
 
-            Text("Scan your whole library for screenshots, duplicates, and clutter")
+            Text("Find screenshots, duplicates, and clutter. Nothing is removed until you review and confirm.")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.5))
                 .multilineTextAlignment(.center)

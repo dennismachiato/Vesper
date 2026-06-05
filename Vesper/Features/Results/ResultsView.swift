@@ -131,7 +131,7 @@ struct ResultsView: View {
                             Text(isDatingMode ? "Best Dating Photos" : "Top Picks")
                                 .font(.title2.bold())
                                 .foregroundStyle(.white)
-                            Text("Tap a photo to view · Rate with stars to teach Vesper")
+                            Text("Review, rate, then save or organize your picks")
                                 .font(.caption)
                                 .foregroundStyle(.white.opacity(0.4))
                         }
@@ -149,7 +149,7 @@ struct ResultsView: View {
                                 .clipShape(Circle())
                                 .overlay(Circle().stroke(Color.vesperAccent.opacity(0.20), lineWidth: 1))
                         }
-                        .accessibilityLabel("Open AI diagnostics")
+                        .accessibilityLabel("Why these picks? Advanced details")
                         #endif
                         Button {
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -158,7 +158,7 @@ struct ResultsView: View {
                             HStack(spacing: 5) {
                                 Image(systemName: "square.and.arrow.down")
                                     .font(.caption.bold())
-                                Text("Save All")
+                                Text("Save Top Picks")
                                     .font(.caption.bold())
                             }
                             .foregroundStyle(.black)
@@ -263,10 +263,10 @@ struct ResultsView: View {
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("Worth Reviewing")
+                                    Text("Alternates")
                                         .font(.title2.bold())
                                         .foregroundStyle(.white)
-                                    Text("Strong alternates Vesper kept close. Tap \(Image(systemName: "plus.circle.fill")) to promote.")
+                                    Text("Close picks that may be better for your taste. Tap \(Image(systemName: "plus.circle.fill")) to promote.")
                                         .font(.caption)
                                         .foregroundStyle(.white.opacity(0.4))
                                         .fixedSize(horizontal: false, vertical: true)
@@ -335,7 +335,7 @@ struct ResultsView: View {
                                 HStack(spacing: 8) {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundStyle(Color.vesperAccent)
-                                    Text("Added to top picks · Vesper will learn from this")
+                                    Text("Added to top picks · saved as a preference signal")
                                         .font(.caption)
                                         .foregroundStyle(.white.opacity(0.8))
                                 }
@@ -350,7 +350,7 @@ struct ResultsView: View {
                     }
                     }
 
-                    // Delete candidates section
+                    // Cleanup review section
                     if !deleteCandidates.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             Button {
@@ -368,11 +368,11 @@ struct ResultsView: View {
                                         HStack(spacing: 6) {
                                             Image(systemName: "trash.circle.fill")
                                                 .foregroundStyle(.red.opacity(0.7))
-                                            Text("Review for Deletion")
+                                            Text("Cleanup Review")
                                                 .font(.title2.bold())
                                                 .foregroundStyle(.white)
                                         }
-                                        Text("Low-rated or weak cleanup picks. Review before deleting.")
+                                        Text("Suggested low-priority photos. Nothing is deleted until you confirm.")
                                             .font(.caption)
                                             .foregroundStyle(.white.opacity(0.4))
                                             .fixedSize(horizontal: false, vertical: true)
@@ -407,7 +407,7 @@ struct ResultsView: View {
                                             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                                             showDeleteAllConfirm = true
                                         } label: {
-                                            Text("Delete All")
+                                            Text("Delete Suggestions")
                                                 .font(.caption.bold())
                                                 .foregroundStyle(.red.opacity(0.85))
                                                 .padding(.horizontal, 10)
@@ -424,21 +424,21 @@ struct ResultsView: View {
                                 .padding(.horizontal)
                             }
                             .confirmationDialog(
-                                "Delete \(deleteCandidates.count) photo\(deleteCandidates.count == 1 ? "" : "s") from your iPhone?",
+                                "Move \(deleteCandidates.count) cleanup suggestion\(deleteCandidates.count == 1 ? "" : "s") to Recently Deleted?",
                                 isPresented: $showDeleteAllConfirm,
                                 titleVisibility: .visible
                             ) {
-                                Button("Delete from Library", role: .destructive) { deleteAllDeleteCandidates() }
+                                Button("Move to Recently Deleted", role: .destructive) { deleteAllDeleteCandidates() }
                                 Button("Cancel", role: .cancel) {}
                             } message: {
                                 Text("This moves these photos to Recently Deleted in Photos. You can recover them for 30 days.")
                             }
                             .confirmationDialog(
-                                "Delete \(selectedDeleteIndices.count) selected photo\(selectedDeleteIndices.count == 1 ? "" : "s") from your iPhone?",
+                                "Move \(selectedDeleteIndices.count) selected cleanup suggestion\(selectedDeleteIndices.count == 1 ? "" : "s") to Recently Deleted?",
                                 isPresented: $showMultiDeleteConfirm,
                                 titleVisibility: .visible
                             ) {
-                                Button("Delete from Library", role: .destructive) { deleteSelectedDeleteCandidates() }
+                                Button("Move to Recently Deleted", role: .destructive) { deleteSelectedDeleteCandidates() }
                                 Button("Cancel", role: .cancel) {}
                             } message: {
                                 Text("This moves these photos to Recently Deleted in Photos. You can recover them for 30 days.")
@@ -508,7 +508,7 @@ struct ResultsView: View {
                                     } label: {
                                         HStack(spacing: 6) {
                                             Image(systemName: "trash.fill")
-                                            Text("Delete \(selectedDeleteIndices.count) Selected")
+                                            Text("Delete \(selectedDeleteIndices.count) Suggested")
                                                 .font(.subheadline.bold())
                                         }
                                         .foregroundStyle(.white)
@@ -546,7 +546,7 @@ struct ResultsView: View {
                                                 .font(.title2.bold())
                                                 .foregroundStyle(.white)
                                         }
-                                        Text("Burst shots and near-identical frames")
+                                        Text("Near-identical frames. Keep your favorite before removing extras.")
                                             .font(.caption)
                                             .foregroundStyle(.white.opacity(0.4))
                                     }
@@ -582,11 +582,11 @@ struct ResultsView: View {
                                 .padding(.horizontal)
                             }
                             .confirmationDialog(
-                                "Delete \(selectedSimilarIndices.count) selected photo\(selectedSimilarIndices.count == 1 ? "" : "s") from your iPhone?",
+                                "Move \(selectedSimilarIndices.count) similar photo\(selectedSimilarIndices.count == 1 ? "" : "s") to Recently Deleted?",
                                 isPresented: $showMultiSimilarDeleteConfirm,
                                 titleVisibility: .visible
                             ) {
-                                Button("Delete from Library", role: .destructive) { deleteSelectedSimilars() }
+                                Button("Move to Recently Deleted", role: .destructive) { deleteSelectedSimilars() }
                                 Button("Cancel", role: .cancel) {}
                             } message: {
                                 Text("This moves these photos to Recently Deleted in Photos. You can recover them for 30 days.")
@@ -643,7 +643,7 @@ struct ResultsView: View {
                                     } label: {
                                         HStack(spacing: 6) {
                                             Image(systemName: "trash.fill")
-                                            Text("Delete \(selectedSimilarIndices.count) Selected")
+                                            Text("Delete \(selectedSimilarIndices.count) Similar")
                                                 .font(.subheadline.bold())
                                         }
                                         .foregroundStyle(.white)
@@ -753,9 +753,10 @@ struct ResultsView: View {
     }
 
     private var guidedReviewSection: some View {
-        let rated = ratedPhotoCount
-        let total = max(allVisibleResults.count, 1)
+        let rated = ratedTopPickCount
+        let total = max(topPicks.count, 1)
         let cleanupCount = deleteCandidates.count + similars.count
+        let ctaTitle = rated == 0 ? "Start Review" : (rated < topPicks.count ? "Continue Review" : "Review Again")
 
         return VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .center, spacing: 10) {
@@ -782,13 +783,48 @@ struct ResultsView: View {
                     .padding(.vertical, 5)
                     .background(Color.vesperAccent.opacity(0.12))
                     .clipShape(Capsule())
-                    .accessibilityLabel("\(rated) of \(total) photos rated")
+                    .accessibilityLabel("\(rated) of \(total) top picks rated")
             }
+
+            Button {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                galleryPool = .topPicks
+                galleryStartIndex = firstUnratedTopPickIndex ?? 0
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "play.fill")
+                        .font(.caption.bold())
+                    Text(ctaTitle)
+                        .font(.subheadline.bold())
+                    Spacer()
+                    Text("\(rated)/\(topPicks.count)")
+                        .font(.caption.bold().monospacedDigit())
+                        .foregroundStyle(.black.opacity(0.62))
+                }
+                .foregroundStyle(.black)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 11)
+                .background(LinearGradient.vesperGold)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .disabled(topPicks.isEmpty)
+            .accessibilityHint("Opens the first unrated top pick")
 
             HStack(spacing: 8) {
                 reviewStepChip(icon: "star.fill", title: "Rate", value: "\(rated)", tint: Color.vesperAccent)
                 reviewStepChip(icon: "folder", title: "Sort", value: "\(ratedPhotoCount)", tint: .green)
-                reviewStepChip(icon: "trash", title: "Clean", value: "\(cleanupCount)", tint: .red)
+                reviewStepChip(icon: "tray.and.arrow.down", title: "Review", value: "\(cleanupCount)", tint: .red)
+            }
+
+            HStack(alignment: .top, spacing: 7) {
+                Image(systemName: "lock.shield")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.38))
+                    .frame(width: 14, height: 14)
+                Text("Nothing is deleted or added to Photos albums unless you confirm or keep automatic star albums on.")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.42))
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(14)
@@ -828,17 +864,25 @@ struct ResultsView: View {
         sessionFeedback.values.count
     }
 
+    private var ratedTopPickCount: Int {
+        topPicks.filter { sessionFeedback[$0.id] != nil }.count
+    }
+
+    private var firstUnratedTopPickIndex: Int? {
+        topPicks.firstIndex { sessionFeedback[$0.id] == nil }
+    }
+
     private var nextReviewStepText: String {
-        if ratedPhotoCount == 0 {
-            return "Open photos, rate with stars, then use the sections below to save or clean up."
+        if ratedTopPickCount == 0 {
+            return "Start with top picks. Ratings teach future batches on this device."
         }
         if !deleteCandidates.isEmpty {
-            return "Low ratings move photos into deletion review so you can decide before removing anything."
+            return "Cleanup suggestions are review-only until you confirm deletion."
         }
         if !runnerUps.isEmpty {
-            return "Check alternates next, then use star ratings to sort the batch."
+            return "Alternates are waiting below if a top pick is not quite right."
         }
-        return "Your ratings are saved. Review star groups or start another batch."
+        return "Your ratings are saved. Open star groups or start another batch."
     }
 
     private var galleryCover: some View {
@@ -1575,7 +1619,7 @@ struct GalleryView: View {
     @State private var showPhotoAccessAlert = false
     @State private var showPhotoIdentifierUnavailableAlert = false
     @State private var showLearningToast = false
-    @State private var learningToastText = "Vesper is learning your taste"
+    @State private var learningToastText = "Rating saved"
     @State private var showFavoritedToast = false
     @State private var pendingFeedbackUploadTasks: [UUID: Task<Void, Never>] = [:]
     /// How long in-screen toasts stay visible before auto-dismissing.
@@ -1852,18 +1896,24 @@ struct GalleryView: View {
         .overlay(alignment: .top) {
             VStack(spacing: 8) {
                 if showLearningToast {
-                    HStack(spacing: 8) {
+                    HStack(alignment: .top, spacing: 8) {
                         Image(systemName: "brain.fill")
                             .font(.caption)
                             .foregroundStyle(Color.vesperAccent)
-                        Text(learningToastText)
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.white.opacity(0.9))
+                            .padding(.top, 1)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(learningToastText)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.9))
+                            Text("Light signal until more ratings confirm it")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.58))
+                        }
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
                     .background(.ultraThinMaterial)
-                    .clipShape(Capsule())
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
                     .transition(.move(edge: .top).combined(with: .opacity))
                 }
                 if showFavoritedToast {
@@ -2010,6 +2060,15 @@ struct GalleryView: View {
                     .minimumScaleFactor(0.85)
             }
 
+            Text(rating == 0
+                 ? "Stars organize this batch and tune future picks on-device."
+                 : "Saved as a light preference signal until more ratings confirm the pattern.")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.38))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 12)
+
             if rating > 0 {
                 VStack(alignment: .leading, spacing: 7) {
                     Text("Optional details")
@@ -2108,7 +2167,7 @@ struct GalleryView: View {
         case 5:
             return ["Great expression", "Good angle", "Good lighting", "Matches my style"]
         case 4:
-            return ["Good expression", "Good angle", "Clean photo", "Matches my style"]
+            return ["Good expression", "Good angle", "Clear photo", "Matches my style"]
         case 3:
             return ["Usable", "Backup", "Mixed expression", "Not the best angle"]
         case 2:
@@ -2175,7 +2234,7 @@ struct GalleryView: View {
         UINotificationFeedbackGenerator().notificationOccurred(feedbackStyle)
 
         if showToast {
-            showLearningMessage("Vesper is learning your taste")
+            showLearningMessage("Rating saved")
         }
 
         let index = photos.firstIndex { $0.id == result.id } ?? currentIndex
