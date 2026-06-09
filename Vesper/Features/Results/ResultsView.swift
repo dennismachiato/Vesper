@@ -50,6 +50,14 @@ struct ResultsView: View {
     @State private var isSyncingRatingAlbums = false
     @State private var hasDeferredRerank = false
     @State private var sessionFeedback: [UUID: GalleryView.FeedbackState] = [:]
+    @State private var showCustomAlbumSheet = false
+    @State private var customAlbumName = ""
+    @State private var customAlbumRating = 0
+    @State private var showCompletionSheet = false
+    @State private var didShowCompletionSheet = false
+    @State private var semanticSearchQuery = ""
+    @State private var semanticSearchResults: [PhotoResult] = []
+    @State private var isSemanticSearching = false
     #if DEBUG
     @State private var showAIDiagnostics = false
     #endif
@@ -72,7 +80,7 @@ struct ResultsView: View {
     // count and would trigger the review prompt too early.
     @State private var didCountThisBatch = false
 
-    enum GalleryPool { case topPicks, runnerUps, deleteCandidates, similars, ratingBucket(Int) }
+    enum GalleryPool { case topPicks, runnerUps, deleteCandidates, similars, ratingBucket(Int), searchResults }
 
     let isDatingMode: Bool
     let purposeTag: String
@@ -187,6 +195,7 @@ struct ResultsView: View {
 
                     guidedReviewSection
                     batchSummarySection
+                    privateSearchSection
 
                     if isDatingMode {
                         // Dating mode: uniform 3-column grid — no oversized hero
@@ -629,6 +638,15 @@ struct ResultsView: View {
                                                     }
                                                 }
                                                 .padding(7)
+                                            } else if result.similarGroupSize > 1 {
+                                                Text("\(result.similarGroupRank)/\(result.similarGroupSize)")
+                                                    .font(.caption2.bold().monospacedDigit())
+                                                    .foregroundStyle(.white)
+                                                    .padding(.horizontal, 7)
+                                                    .padding(.vertical, 4)
+                                                    .background(.black.opacity(0.62))
+                                                    .clipShape(Capsule())
+                                                    .padding(7)
                                             }
                                         }
                                         .scaleEffect(isMultiSelectingSimilars && isSelected ? 0.95 : 1.0)
@@ -733,6 +751,12 @@ struct ResultsView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("Some photos are missing their Photos library identifier, so Vesper cannot delete them from your iPhone.")
+        }
+        .sheet(isPresented: $showCustomAlbumSheet) {
+            customAlbumSheet
+        }
+        .sheet(isPresented: $showCompletionSheet) {
+            reviewCompletionSheet
         }
         #if DEBUG
         .sheet(isPresented: $showAIDiagnostics) {
@@ -882,6 +906,102 @@ struct ResultsView: View {
         .padding(.horizontal)
     }
 
+    private var privateSearchSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: "text.magnifyingglass")
+                    .foregroundStyle(Color.vesperAccent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Find in this batch")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.white)
+                    Text("Search by subject, setting, outfit, or vibe. Search stays on device.")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.45))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            HStack(spacing: 8) {
+                TextField("e.g. black outfit at sunset", text: $semanticSearchQuery)
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.search)
+                    .onSubmit { runSemanticSearch() }
+                    .padding(.horizontal, 12)
+                    .frame(height: 42)
+                    .background(Color.white.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .foregroundStyle(.white)
+
+                Button {
+                    runSemanticSearch()
+                } label: {
+                    Group {
+                        if isSemanticSearching {
+                            ProgressView().tint(.black)
+                        } else {
+                            Image(systemName: "magnifyingglass")
+                        }
+                    }
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.black)
+                    .frame(width: 42, height: 42)
+                    .background(Color.vesperAccent)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .disabled(semanticSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSemanticSearching)
+                .accessibilityLabel("Search this batch")
+            }
+
+            if !semanticSearchResults.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(semanticSearchResults.prefix(8).enumerated()), id: \.element.id) { index, result in
+                            Image(uiImage: result.image)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 78, height: 92)
+                                .clipped()
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .onTapGesture {
+                                    galleryPool = .searchResults
+                                    galleryStartIndex = index
+                                }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .padding(.horizontal)
+    }
+
+    private func runSemanticSearch() {
+        let query = semanticSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty, !isSemanticSearching else { return }
+        isSemanticSearching = true
+        Task {
+            let embedding = await CLIPTextEmbedder.shared?.embedAsync(prompt: query)
+            await MainActor.run {
+                defer { isSemanticSearching = false }
+                guard let embedding else {
+                    semanticSearchResults = []
+                    return
+                }
+                semanticSearchResults = allVisibleResults
+                    .compactMap { result -> (PhotoResult, Float)? in
+                        guard let imageEmbedding = result.clipEmbedding else { return nil }
+                        return (result, CLIPEmbedder.cosineSimilarity(imageEmbedding, embedding))
+                    }
+                    .sorted { $0.1 > $1.1 }
+                    .map(\.0)
+            }
+        }
+    }
+
     private func summaryMetric(title: String, value: String, tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(value)
@@ -1019,13 +1139,14 @@ struct ResultsView: View {
         case .deleteCandidates: return deleteCandidates
         case .similars: return similars
         case .ratingBucket(let rating): return ratedPhotos(starRating: rating)
+        case .searchResults: return semanticSearchResults
         }
     }
 
     private func galleryShowsReasoning(_ pool: GalleryPool) -> Bool {
         switch pool {
         case .topPicks, .runnerUps: return true
-        case .deleteCandidates, .similars, .ratingBucket: return false
+        case .deleteCandidates, .similars, .ratingBucket, .searchResults: return false
         }
     }
 
@@ -1043,7 +1164,7 @@ struct ResultsView: View {
         case .similars:
             guard similars.indices.contains(index) else { return }
             similars.remove(at: index)
-        case .ratingBucket:
+        case .ratingBucket, .searchResults:
             guard galleryPhotos.indices.contains(index) else { return }
             let photoID = galleryPhotos[index].id
             removePhotoFromAllPools(photoID: photoID)
@@ -1153,18 +1274,160 @@ struct ResultsView: View {
                 }
             }
             .padding(.horizontal)
+
+            Button {
+                customAlbumName = ""
+                customAlbumRating = 0
+                showCustomAlbumSheet = true
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "folder.badge.plus")
+                    Text("Create Custom Album")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.bold())
+                        .foregroundStyle(.white.opacity(0.28))
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.78))
+                .padding(.horizontal, 12)
+                .frame(height: 44)
+                .background(Color.white.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08), lineWidth: 1))
+            }
+            .padding(.horizontal)
         }
+    }
+
+    private var customAlbumSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Album") {
+                    TextField("Album name", text: $customAlbumName)
+                    Picker("Photos", selection: $customAlbumRating) {
+                        Text("Current top picks").tag(0)
+                        ForEach((1...5).reversed(), id: \.self) { rating in
+                            Text("\(rating) star photos (\(ratedPhotos(starRating: rating).count))")
+                                .tag(rating)
+                        }
+                    }
+                }
+
+                Section {
+                    Text("Albums reference the original items in Apple Photos. Vesper does not create duplicate image files.")
+                        .font(.caption)
+                }
+            }
+            .navigationTitle("Custom Album")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showCustomAlbumSheet = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        let photos = customAlbumRating == 0
+                            ? topPicks
+                            : ratedPhotos(starRating: customAlbumRating)
+                        saveResultsToAlbum(photos, named: customAlbumName)
+                        showCustomAlbumSheet = false
+                    }
+                    .disabled(
+                        customAlbumName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        (customAlbumRating == 0 ? topPicks : ratedPhotos(starRating: customAlbumRating)).isEmpty
+                    )
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private var reviewCompletionSheet: some View {
+        NavigationStack {
+            VStack(spacing: 22) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.green)
+                VStack(spacing: 6) {
+                    Text("Top picks reviewed")
+                        .font(.title2.bold())
+                    Text("\(highRatedCount) preferred, \(neutralRatedCount) backup, and \(lowRatedCount) cleanup rating\(lowRatedCount == 1 ? "" : "s") were added to your local preference profile.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack(spacing: 10) {
+                    completionMetric("\(highRatedCount)", label: "4-5 stars", tint: .green)
+                    completionMetric("\(neutralRatedCount)", label: "3 stars", tint: .orange)
+                    completionMetric("\(lowRatedCount)", label: "1-2 stars", tint: .red)
+                }
+
+                Button {
+                    showCompletionSheet = false
+                    customAlbumName = ""
+                    customAlbumRating = 0
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        showCustomAlbumSheet = true
+                    }
+                } label: {
+                    Label("Organize into an Album", systemImage: "folder.badge.plus")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.vesperAccent)
+                .foregroundStyle(.black)
+
+                Button("Keep Reviewing") {
+                    showCompletionSheet = false
+                }
+                .foregroundStyle(.secondary)
+            }
+            .padding(24)
+            .navigationTitle("Review Complete")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func completionMetric(_ value: String, label: String, tint: Color) -> some View {
+        VStack(spacing: 4) {
+            Text(value)
+                .font(.title3.bold().monospacedDigit())
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(tint.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     private func dismissGallery() {
         galleryStartIndex = nil
-        guard hasDeferredRerank else { return }
-        hasDeferredRerank = false
-        applyFeedbackDrivenPoolChanges()
-        rerankTopAndReviewPools()
-        withAnimation(.spring(response: 0.35)) { showRerankedToast = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
-            withAnimation(.easeOut(duration: 0.35)) { showRerankedToast = false }
+        if hasDeferredRerank {
+            hasDeferredRerank = false
+            applyFeedbackDrivenPoolChanges()
+            rerankTopAndReviewPools()
+            withAnimation(.spring(response: 0.35)) { showRerankedToast = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+                withAnimation(.easeOut(duration: 0.35)) { showRerankedToast = false }
+            }
+        }
+        if !didShowCompletionSheet,
+           !topPicks.isEmpty,
+           ratedTopPickCount == topPicks.count {
+            didShowCompletionSheet = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                showCompletionSheet = true
+            }
         }
     }
 
@@ -1333,6 +1596,53 @@ struct ResultsView: View {
     }
 
     // MARK: - Bulk actions
+
+    private func saveResultsToAlbum(_ results: [PhotoResult], named requestedName: String) {
+        let name = requestedName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let assetIds = results.compactMap { $0.assetIdentifier.isEmpty ? nil : $0.assetIdentifier }
+        guard !name.isEmpty, !assetIds.isEmpty else { return }
+
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status.vesperCanMutateSelectedAssets else {
+            if status == .notDetermined {
+                PHPhotoLibrary.requestAuthorization(for: .readWrite) { newStatus in
+                    DispatchQueue.main.async {
+                        if newStatus.vesperCanMutateSelectedAssets {
+                            saveResultsToAlbum(results, named: name)
+                        } else {
+                            showPhotoLibraryAccessAlert = true
+                        }
+                    }
+                }
+            } else {
+                showPhotoLibraryAccessAlert = true
+            }
+            return
+        }
+
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: assetIds, options: nil)
+        let existingAlbum = fetchAlbum(named: name)
+        PHPhotoLibrary.shared().performChanges {
+            if let existingAlbum {
+                PHAssetCollectionChangeRequest(for: existingAlbum)?.addAssets(assets)
+            } else {
+                let request = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: name)
+                request.addAssets(assets)
+            }
+        } completionHandler: { success, error in
+            DispatchQueue.main.async {
+                if success {
+                    albumToastText = "Saved to \(name)"
+                    withAnimation(.spring(response: 0.4)) { showAlbumSavedToast = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                        withAnimation { showAlbumSavedToast = false }
+                    }
+                } else if let error {
+                    resultsLogger.error("Custom album save failed: \(error.localizedDescription, privacy: .private)")
+                }
+            }
+        }
+    }
 
     private func saveTopPicksToAlbum() {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -2501,6 +2811,12 @@ struct GalleryView: View {
             savingFeedbackIDs.remove(result.id)
 
             guard didSave else { return }
+            PersonalEvaluationStore.shared.record(
+                result: result,
+                rating: rating,
+                reason: cleanReason,
+                purposeTag: purposeTag
+            )
             addToRatingAlbumIfPossible(result: result, rating: rating)
 
             if allowUploadPrompt {

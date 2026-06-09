@@ -28,13 +28,36 @@ private struct SplashView: View {
     }
 }
 
+private struct DataRecoveryView: View {
+    var body: some View {
+        ZStack {
+            LinearGradient.vesperBg.ignoresSafeArea()
+            VStack(spacing: 18) {
+                Image(systemName: "externaldrive.badge.exclamationmark")
+                    .font(.system(size: 42, weight: .thin))
+                    .foregroundStyle(Color.vesperAccent)
+                Text("Vesper couldn't open its local data")
+                    .font(.title3.bold())
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                Text("Your Photos library was not changed. Close and reopen Vesper. If this continues, reinstalling resets Vesper's local learning data.")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.55))
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(28)
+        }
+    }
+}
+
 @main
 struct VesperApp: App {
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @AppStorage("hasCompletedStyleQuiz")  private var hasCompletedStyleQuiz  = false
     @State private var splashDone = false
 
-    let modelContainer: ModelContainer = {
+    let modelContainer: ModelContainer? = {
         do {
             return try VesperApp.makeModelContainer()
         } catch {
@@ -45,8 +68,8 @@ struct VesperApp: App {
             if let memory = try? VesperApp.makeModelContainer(isStoredInMemoryOnly: true) {
                 return memory
             }
-            // If even the in-memory container fails, we have no graceful option.
-            fatalError("Unable to initialize any ModelContainer: \(error)")
+            appLogger.fault("In-memory ModelContainer initialization also failed: \(error.localizedDescription, privacy: .private)")
+            return nil
         }
     }()
 
@@ -107,15 +130,17 @@ struct VesperApp: App {
         // NSUbiquitousKeyValueStore even after reinstall, but SwiftData doesn't.
         // If the user is "onboarded" but the store is empty, reset onboarding so
         // consent + style quiz run again instead of silently skipping them.
-        if !isUITesting {
+        if !isUITesting, let modelContainer {
             VesperApp.resetOnboardingIfRestoredEmpty(container: modelContainer)
         }
         VesperApp.protectStoreFiles()
 
         // Run data maintenance once on launch, off the main actor.
-        Task.detached(priority: .background) { [modelContainer] in
-            let ctx = ModelContext(modelContainer)
-            DataMaintenance.prune(in: ctx)
+        if let modelContainer {
+            Task.detached(priority: .background) {
+                let ctx = ModelContext(modelContainer)
+                DataMaintenance.prune(in: ctx)
+            }
         }
     }
 
@@ -169,27 +194,33 @@ struct VesperApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if !splashDone {
-                SplashView()
-                    .transition(.opacity)
-                    .onAppear {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
-                            withAnimation(.easeInOut(duration: 0.35)) { splashDone = true }
+            if let modelContainer {
+                Group {
+                    if !splashDone {
+                        SplashView()
+                            .transition(.opacity)
+                            .onAppear {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                                    withAnimation(.easeInOut(duration: 0.35)) { splashDone = true }
+                                }
+                            }
+                    } else if !hasCompletedOnboarding {
+                        OnboardingView {
+                            hasCompletedOnboarding = true
                         }
+                    } else if !hasCompletedStyleQuiz {
+                        StyleQuizView {
+                            hasCompletedStyleQuiz = true
+                        }
+                    } else {
+                        HomeView()
                     }
-            } else if !hasCompletedOnboarding {
-                OnboardingView {
-                    hasCompletedOnboarding = true
                 }
-            } else if !hasCompletedStyleQuiz {
-                StyleQuizView {
-                    hasCompletedStyleQuiz = true
-                }
+                .modelContainer(modelContainer)
             } else {
-                HomeView()
+                DataRecoveryView()
             }
         }
-        .modelContainer(modelContainer)
     }
 }
 

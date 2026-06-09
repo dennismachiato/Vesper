@@ -40,6 +40,12 @@ struct PhotoResult: Identifiable {
     /// Within similar photos, how this frame compares against its closest alternatives.
     var batchRelativeScore: Float = 0.5
     var batchComparisonNote: String = ""
+    var clipEmbedding: [Float]? = nil
+    var similarGroupID: Int? = nil
+    var similarGroupSize: Int = 1
+    var similarGroupRank: Int = 1
+    var modelConfidence: Float = 0.5
+    var modelVersion: String = VesperModelMetadata.scoringVersion
 }
 
 /// Counting semaphore for Swift structured concurrency.
@@ -60,11 +66,18 @@ private actor AnalysisSemaphore {
     }
 }
 
+private struct PairwisePreferenceComparison: Sendable {
+    let winner: [Float]
+    let loser: [Float]
+    let weight: Float
+}
+
 class BatchProcessor {
     private let analyzer = VisionAnalyzer()
     private let categoryScorer = CategoryScorer()
     private let aestheticScorer = AestheticScorer()
     private let referenceScorer = ReferenceScorer()
+    private let identityProvider: any FaceIdentityEmbeddingProvider = CLIPFaceIdentityProvider()
 
     /// Embeddings for "objectively bad photo" concepts — computed once per BatchProcessor instance.
     /// Negative CLIP signal: photos semantically similar to these get a quality penalty.
@@ -352,6 +365,45 @@ class BatchProcessor {
         return weights
     }
 
+    func pairwisePreferenceScore(
+        for embedding: [Float],
+        feedbackHistory: [PhotoFeedback],
+        now: Date = Date()
+    ) -> Float? {
+        let comparisons = feedbackHistory.compactMap { feedback -> PairwisePreferenceComparison? in
+            let image = feedback.imageEmbedding
+            let contrast = feedback.contrastEmbedding
+            guard !image.isEmpty, !contrast.isEmpty, feedback.preferenceSignal != 0 else { return nil }
+            let weight = preferenceEvidenceWeight(for: feedback, now: now) * abs(feedback.preferenceSignal)
+            return feedback.preferenceSignal > 0
+                ? PairwisePreferenceComparison(winner: image, loser: contrast, weight: weight)
+                : PairwisePreferenceComparison(winner: contrast, loser: image, weight: weight)
+        }
+        return Self.pairwisePreferenceScore(for: embedding, comparisons: comparisons)
+    }
+
+    private nonisolated static func pairwisePreferenceScore(
+        for embedding: [Float],
+        comparisons: [PairwisePreferenceComparison]
+    ) -> Float? {
+        guard !comparisons.isEmpty else { return nil }
+
+        var weightedDelta: Float = 0
+        var totalWeight: Float = 0
+        for comparison in comparisons {
+            let winnerSimilarity = CLIPEmbedder.cosineSimilarity(embedding, comparison.winner)
+            let loserSimilarity = CLIPEmbedder.cosineSimilarity(embedding, comparison.loser)
+            weightedDelta += (winnerSimilarity - loserSimilarity) * comparison.weight
+            totalWeight += comparison.weight
+        }
+        guard totalWeight > 0 else { return nil }
+
+        let evidence = min(max(totalWeight, 0), 80)
+        let shrinkage = evidence / (evidence + 4)
+        let normalizedDelta = min(max((weightedDelta / totalWeight) * 2.5, -0.5), 0.5)
+        return min(max(0.5 + normalizedDelta * shrinkage, 0), 1)
+    }
+
     /// Learns the user's preferred head angle (yaw) from high-rated photos where their OWN face was
     /// identified. Returns nil until there are ≥5 such samples — angle is personal and noisy, so
     /// it needs more evidence than the dimension weights before it influences ranking. The value is
@@ -551,7 +603,13 @@ class BatchProcessor {
 
         // Feature 6: per-user weight learning from historical feedback.
         // Starts from the first event, then uses shrinkage so early feedback is gentle.
-        let learnedWeights = learnedWeightMultipliers(from: feedbackHistory)
+        var learnedWeights = learnedWeightMultipliers(from: feedbackHistory)
+        for (dimension, manualMultiplier) in TasteControls.current.dimensionMultipliers {
+            learnedWeights[dimension] = min(max(
+                (learnedWeights[dimension] ?? 1) * manualMultiplier,
+                0.70
+            ), 1.40)
+        }
 
         // Learned preferred head angle from liked, identified self-photos (nil until ≥5 samples)
         let preferredYaw = learnedPreferredYaw(from: feedbackHistory)
@@ -565,6 +623,15 @@ class BatchProcessor {
         let precomputedTrendEmb = trendEmbedding
         let precomputedEyeOcclusionEmb = eyeOcclusionEmbedding
         let precomputedClosedEyeEmb = closedEyeEmbedding
+        let pairwiseComparisons = feedbackHistory.compactMap { feedback -> PairwisePreferenceComparison? in
+            let image = feedback.imageEmbedding
+            let contrast = feedback.contrastEmbedding
+            guard !image.isEmpty, !contrast.isEmpty, feedback.preferenceSignal != 0 else { return nil }
+            let weight = preferenceEvidenceWeight(for: feedback, now: now) * abs(feedback.preferenceSignal)
+            return feedback.preferenceSignal > 0
+                ? PairwisePreferenceComparison(winner: image, loser: contrast, weight: weight)
+                : PairwisePreferenceComparison(winner: contrast, loser: image, weight: weight)
+        }
 
         // 2. Single-pass: Vision analysis + CLIP + category/aesthetic/reference scoring.
         // Bounded concurrency: at most 4 tasks run simultaneously. Without this cap all N tasks
@@ -731,8 +798,18 @@ class BatchProcessor {
                         if !lowRatedEmbeddings.isEmpty      { feedbackScore -= weightedSim(lowRatedEmbeddings)      * 0.30 }
                         if !lowRatingReasonEmbeddings.isEmpty { feedbackScore -= weightedSim(lowRatingReasonEmbeddings) * 0.10 }
                         if !contrastEmbeddings.isEmpty      { feedbackScore -= weightedSim(contrastEmbeddings)      * 0.08 }
+                        if let pairwise = Self.pairwisePreferenceScore(
+                            for: imageEmb,
+                            comparisons: pairwiseComparisons
+                        ) {
+                            feedbackScore += (pairwise - 0.5) * 0.24
+                        }
                         s.feedbackScore = max(0, min(1, feedbackScore))
                     }
+
+                    s.userFaceMatchConfidence = s.userFaceIdentified
+                        ? min(max(s.userFaceMatchConfidence, 0), 1)
+                        : 0
 
                     await semaphore.release()
                     return (i, s)
@@ -966,6 +1043,22 @@ class BatchProcessor {
             result.compositeScore = normalizedComposite(for: score)
             result.batchRelativeScore = score.batchRelativeScore
             result.batchComparisonNote = score.batchComparisonNote
+            result.clipEmbedding = score.clipEmbedding
+            result.similarGroupID = score.similarGroupID
+            result.similarGroupSize = score.similarGroupSize
+            result.similarGroupRank = score.similarGroupRank
+            result.modelConfidence = ModelConfidenceEstimator.confidence(
+                quality: score.qualityScore,
+                exposure: score.exposureScore,
+                composition: score.compositionScore,
+                eyeState: score.eyeState,
+                eyeOpenConfidence: score.eyeOpenConfidence,
+                eyeOcclusion: score.eyeOcclusionScore,
+                identityConfidence: score.userFaceMatchConfidence,
+                hasFace: score.hasFace,
+                hasReference: hasReference,
+                hasFeedback: hasFeedback
+            )
             return result
         }
 
@@ -983,8 +1076,16 @@ class BatchProcessor {
         guard scores.count > 1 else { return }
 
         let clusters = similarPhotoClusters(scores, threshold: 0.86)
-        for cluster in clusters where cluster.count >= 2 {
+        for (groupID, cluster) in clusters.enumerated() where cluster.count >= 2 {
             let qualityValues = cluster.map { batchFrameQuality(scores[$0]) }
+            let rankedIndices = cluster.sorted {
+                batchFrameQuality(scores[$0]) > batchFrameQuality(scores[$1])
+            }
+            for (rank, index) in rankedIndices.enumerated() {
+                scores[index].similarGroupID = groupID
+                scores[index].similarGroupSize = cluster.count
+                scores[index].similarGroupRank = rank + 1
+            }
             guard let maxQuality = qualityValues.max(),
                   let minQuality = qualityValues.min(),
                   maxQuality - minQuality > 0.02 else {
@@ -1234,14 +1335,15 @@ class BatchProcessor {
         let margin: Float
         let confidence: Float
 
-        init(index: Int, similarity: Float, margin: Float) {
+        init(index: Int, similarity: Float, margin: Float, referenceCount: Int) {
             self.index = index
             self.similarity = similarity
             self.margin = margin
-            // Blend absolute similarity and separation from the runner-up. Margin saturates at
-            // 0.15 because CLIP face-crop distances are usually compressed.
-            let marginScore = min(max(margin / 0.15, 0), 1)
-            self.confidence = min(max(similarity * 0.75 + marginScore * 0.25, 0), 1)
+            self.confidence = ModelConfidenceEstimator.identityConfidence(
+                similarity: similarity,
+                margin: margin,
+                referenceCount: referenceCount
+            )
         }
     }
 
@@ -1274,10 +1376,7 @@ class BatchProcessor {
               let cropped = cgImage.cropping(to: cropRect) else { return nil }
         guard let faceEmb = await clipEmbedder.embedAsync(image: UIImage(cgImage: cropped)) else { return nil }
 
-        let perRef = userFaceEmbeddings.map { CLIPEmbedder.cosineSimilarity(faceEmb, $0) }
-        let maxSim = perRef.max() ?? 0
-        let avgSim = perRef.reduce(0, +) / Float(perRef.count)
-        return maxSim * 0.65 + avgSim * 0.35
+        return identityProvider.similarity(candidate: faceEmb, references: userFaceEmbeddings)
     }
 
     /// Confirms whether a solo photo's single face belongs to the user. Used so that selfies (one
@@ -1292,7 +1391,11 @@ class BatchProcessor {
         guard !userFaceEmbeddings.isEmpty else { return nil }
         guard let sim = await userFaceSimilarity(face, in: image, userFaceEmbeddings: userFaceEmbeddings),
               sim >= BatchProcessor.soloFaceMatchFloor else { return nil }
-        return sim
+        return ModelConfidenceEstimator.identityConfidence(
+            similarity: sim,
+            margin: 0.08,
+            referenceCount: userFaceEmbeddings.count
+        )
     }
 
     /// Identifies which candidate face belongs to the user by comparing CLIP face-crop embeddings
@@ -1336,7 +1439,12 @@ class BatchProcessor {
             : BatchProcessor.singleReferenceClearMargin
         if margin < requiredMargin { return nil }
 
-        return UserFaceMatch(index: best.index, similarity: best.sim, margin: margin)
+        return UserFaceMatch(
+            index: best.index,
+            similarity: best.sim,
+            margin: margin,
+            referenceCount: userFaceEmbeddings.count
+        )
     }
 
     // MARK: - Outfit contrast

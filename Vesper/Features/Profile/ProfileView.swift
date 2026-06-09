@@ -51,6 +51,10 @@ struct ProfileView: View {
     @State private var showDeleteAllError = false
     @State private var showExportShare = false
     @State private var exportFileURL: URL?
+    @AppStorage(TasteControls.Keys.technicalQuality) private var technicalQuality = 1.0
+    @AppStorage(TasteControls.Keys.expression) private var expression = 1.0
+    @AppStorage(TasteControls.Keys.composition) private var composition = 1.0
+    @AppStorage(TasteControls.Keys.personalStyle) private var personalStyle = 1.0
 
     private var highRatedCount: Int { feedbackHistory.filter(\.isPositiveSignal).count }
     private var neutralCount: Int { feedbackHistory.filter(\.isNeutralSignal).count }
@@ -58,6 +62,17 @@ struct ProfileView: View {
     private var multiPersonReferenceCount: Int { referencePhotos.filter { $0.faceCount > 1 }.count }
     private var clearSoloReferenceCount: Int {
         referencePhotos.filter { $0.faceCount == 1 && $0.sharpness >= 0.4 && $0.contrast >= 0.25 }.count
+    }
+    private var hasFrontFacingReference: Bool {
+        referencePhotos.contains { $0.faceCount == 1 && abs($0.avgFaceYaw) < 0.12 }
+    }
+    private var hasAngledReference: Bool {
+        referencePhotos.contains { $0.faceCount == 1 && abs($0.avgFaceYaw) > 0.20 }
+    }
+    private var hasLightingDiversity: Bool {
+        guard let minBrightness = referencePhotos.map(\.brightness).min(),
+              let maxBrightness = referencePhotos.map(\.brightness).max() else { return false }
+        return maxBrightness - minBrightness >= 0.22
     }
     private var styleReferenceTarget: Int { 10 }
     private var identityConfidenceLabel: String {
@@ -463,6 +478,8 @@ struct ProfileView: View {
                 .padding(20)
                 .vesperCard(cornerRadius: 18)
 
+                tasteControlsSection
+
                 // Privacy note
                 HStack(spacing: 10) {
                     Image(systemName: "lock.shield.fill")
@@ -599,6 +616,76 @@ struct ProfileView: View {
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(summary.tint.opacity(0.16), lineWidth: 1))
     }
 
+    private var tasteControlsSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Taste Controls")
+                        .font(.title3.bold())
+                        .foregroundStyle(.white)
+                    Text("Set a gentle starting bias. Ratings still refine these preferences.")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.45))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button("Reset") {
+                    technicalQuality = 1
+                    expression = 1
+                    composition = 1
+                    personalStyle = 1
+                }
+                .font(.caption.bold())
+                .foregroundStyle(Color.vesperAccent)
+            }
+
+            tasteSlider(title: "Technical quality", icon: "camera.aperture", value: $technicalQuality)
+            tasteSlider(title: "Expression", icon: "face.smiling", value: $expression)
+            tasteSlider(title: "Composition", icon: "viewfinder", value: $composition)
+            tasteSlider(title: "Personal style", icon: "paintpalette", value: $personalStyle)
+
+            let evaluation = PersonalEvaluationStore.shared.summary()
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.diamond")
+                    .foregroundStyle(Color.vesperAccent.opacity(0.8))
+                Text(evaluation.sampleCount == 0
+                     ? "Calibration starts after your first rating."
+                     : "\(evaluation.sampleCount) private calibration examples saved with model \(VesperModelMetadata.scoringVersion).")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.42))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(20)
+        .vesperCard(cornerRadius: 18)
+    }
+
+    private func tasteSlider(title: String, icon: String, value: Binding<Double>) -> some View {
+        VStack(spacing: 7) {
+            HStack {
+                Image(systemName: icon)
+                    .font(.caption)
+                    .foregroundStyle(Color.vesperAccent)
+                    .frame(width: 18)
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.82))
+                Spacer()
+                Text(tasteControlLabel(value.wrappedValue))
+                    .font(.caption.bold())
+                    .foregroundStyle(.white.opacity(0.48))
+            }
+            Slider(value: value, in: 0.75...1.25, step: 0.05)
+                .tint(Color.vesperAccent)
+        }
+    }
+
+    private func tasteControlLabel(_ value: Double) -> String {
+        if value < 0.92 { return "Flexible" }
+        if value > 1.08 { return "Prioritize" }
+        return "Balanced"
+    }
+
     private var referenceGuidanceCard: some View {
         let needsMore = referencePhotos.count < 5
         let hasManyGroupRefs = multiPersonReferenceCount >= max(2, referencePhotos.count / 2)
@@ -650,6 +737,15 @@ struct ProfileView: View {
     private func referenceGuidanceText(needsMore: Bool, hasManyGroupRefs: Bool) -> String {
         if hasManyGroupRefs {
             return "Several references include multiple people. Add a few clear solo photos so Vesper can identify you more reliably."
+        }
+        if !hasFrontFacingReference {
+            return "Add a sharp, front-facing solo photo. It gives identity matching a clear anchor before Vesper learns your preferred angles."
+        }
+        if !hasAngledReference {
+            return "Add one clear three-quarter or side-angle photo so Vesper can recognize you beyond straight-on selfies."
+        }
+        if !hasLightingDiversity {
+            return "Your references use similar lighting. Add one clear photo in a different lighting condition for more reliable matching."
         }
         if needsMore {
             return "Add a few more clear favorites for stronger taste and face matching. Solo photos are the best anchors."
@@ -814,6 +910,10 @@ struct ProfileView: View {
         UserDefaults.standard.removeObject(forKey: "autoCreateRatingAlbums")
         UserDefaults.standard.removeObject(forKey: "completedBatchCount")
         UserDefaults.standard.removeObject(forKey: "lastPickCount")
+        for key in TasteControls.Keys.all {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        PersonalEvaluationStore.shared.removeAll()
         PromptHistory.clear()
     }
 

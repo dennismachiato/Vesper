@@ -9,6 +9,9 @@ import SwiftUI
 import PhotosUI
 import Combine
 import ImageIO
+import OSLog
+
+private let processingLogger = Logger(subsystem: "Vesper", category: "Processing")
 
 private enum ProcessingPhase: Equatable {
     case loading    // downloading from iCloud / camera roll
@@ -414,6 +417,7 @@ struct ProcessingView: View {
         analysisCompleted = 0
 
         let processor = BatchProcessor()
+        let analysisStartedAt = Date()
         let result = await processor.processImages(
             images: sortedImages,
             assetIdentifiers: sortedIdentifiers,
@@ -446,6 +450,13 @@ struct ProcessingView: View {
                 analysisTotal = total
             }
         )
+        let analysisDuration = Date().timeIntervalSince(analysisStartedAt)
+        let secondsPerPhoto = analysisDuration / Double(max(sortedImages.count, 1))
+        if secondsPerPhoto > VesperPerformanceBudget.targetAnalysisSecondsPerPhoto {
+            processingLogger.warning(
+                "Analysis exceeded budget: \(secondsPerPhoto, privacy: .public) seconds/photo across \(sortedImages.count, privacy: .public) photos"
+            )
+        }
 
         guard !Task.isCancelled else { return }
 

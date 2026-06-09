@@ -68,6 +68,9 @@ struct PhotoScore {
     var negativeScore: Float = 0.0      // max cosine similarity to "bad photo" descriptions — acts as penalty
     var batchRelativeScore: Float = 0.5 // within similar shots: 1 = strongest frame, 0 = weaker alternate
     var batchComparisonNote: String = ""
+    var similarGroupID: Int? = nil
+    var similarGroupSize: Int = 1
+    var similarGroupRank: Int = 1
 
     /// Estimated normalised subject height (0 = no body / partial torso, 1 = full-body, head-to-toe).
     /// Derived from VNDetectHumanBodyPoseRequest keypoints (head→ankle vertical span).
